@@ -302,3 +302,21 @@ with tab6:
     if st.button("Guardar en intuición"):
         book["intuition"].loc[len(book["intuition"])] = [fmt_nj(), "manual", 0, need, ""]
         st.success("Guardado en hoja intuición.")
+# =========================
+# MENSAJE AUTOMÁTICO AL INICIAR EL BOT
+# =========================
+if "init_mail_sent" not in st.session_state:
+    if email_enabled():
+        try:
+            inicio_html = f"""
+            <h3>✅ Bot activo</h3>
+            <p>El bot se inició correctamente a las {fmt_nj()} (hora NJ).</p>
+            <p>Activos principales: {", ".join(DEFAULT_ASSETS)}</p>
+            """
+            send_email("✅ Bot activo y funcionando", inicio_html, to_secondary=True)
+            append_log(book, "email_sent", "Inicio automático")
+            st.success("Se envió correo automático de inicio ✅")
+        except Exception as e:
+            append_log(book, "email_error", f"Inicio fallido: {e}")
+            st.error(f"No se pudo enviar correo de inicio: {e}")
+    st.session_state["init_mail_sent"] = True
