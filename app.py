@@ -1,207 +1,145 @@
-import io
-import os
-import smtplib
-import ssl
-import time
-from datetime import datetime, timedelta, time as dtime
-from email.mime.multipart import MIMEMultipart
-from email.mime.text import MIMEText
+# ===============================
+# Trading Bot Visual Dashboard
+# Streamlit completo (con estado de mercado)
+# ===============================
 
-import numpy as np
-import pandas as pd
-import pytz
 import streamlit as st
+import pandas as pd
 import matplotlib.pyplot as plt
+import time
+import io
+from datetime import datetime, time as dtime
 
-# =========================
-# CONFIG INICIAL
-# =========================
-TZ_NJ = "America/New_York"
-TZ_LON = "Europe/London"
+# ===============================
+# Función de Autorefresco
+# ===============================
+def auto_refresh_every(seconds: int, key: str = "auto_refresh_tick"):
+    """
+    Vuelve a ejecutar la app cada 'seconds' segundos sin usar experimental_rerun.
+    """
+    now = int(time.time())
+    last = st.session_state.get(key, now)
+    if key not in st.session_state:
+        st.session_state[key] = now
+    elif (now - last) >= seconds:
+        st.session_state[key] = now
+        st.rerun()
 
-DEFAULT_ASSETS = ["MES", "DKNG"]
-SCORE_MIN = 40
-PROB_HIGH = 80
-PROB_MID_LOW = (40, 79)
-
-# =========================
-# UTILIDADES
-# =========================
-def now_nj():
-    return datetime.now(pytz.timezone(TZ_NJ))
-
-def fmt_nj(dt=None):
+# ===============================
+# Estado del mercado (NYSE)
+# ===============================
+def is_nyse_open(dt=None):
     if dt is None:
-        dt = now_nj()
-    return dt.strftime("%m/%d/%Y %I:%M:%S %p")
-
-def ensure_columns(df: pd.DataFrame, cols: list):
-    for c in cols:
-        if c not in df.columns:
-            df[c] = np.nan
-    return df[cols]
-
-def create_blank_book() -> dict:
-    return {
-        "signals": pd.DataFrame(columns=["symbol","alias","tf","direction","score","time","date","entry","tp","sl","expected_gain","contracts","stage","confirm_at","result"]),
-        "pending": pd.DataFrame(columns=["symbol","alias","tf","direction","score","time","date","entry","tp","sl","confirm_at","notified_pre"]),
-        "performance": pd.DataFrame(columns=["date","time","symbol","tf","trades","wins","losses","profit","accuracy"]),
-        "log": pd.DataFrame(columns=["timestamp","event","details"]),
-    }
-
-def is_market_open_ny(dt_nj=None):
-    if dt_nj is None:
-        dt_nj = now_nj()
-    wd = dt_nj.weekday()
-    if wd == 5:  # Saturday
+        dt = datetime.now()
+    if dt.weekday() >= 5:  # sábado y domingo
         return False
-    if wd == 6:  # Sunday
-        return dt_nj.time() >= dtime(18, 0)
-    return True
+    start = dtime(9,30)
+    end   = dtime(17,0)
+    return start <= dt.time() <= end
 
-def is_market_regular_nyse(dt_nj=None):
-    if dt_nj is None:
-        dt_nj = now_nj()
-    t = dt_nj.time()
-    return (t >= dtime(9,30)) and (t < dtime(16,0))
+def estado_mercado():
+    return "🟢 ABIERTO" if is_nyse_open() else "🔴 CERRADO"
 
-def is_market_open_london(dt_nj=None):
-    if dt_nj is None:
-        dt_nj = now_nj()
-    london = dt_nj.astimezone(pytz.timezone(TZ_LON))
-    t = london.time()
-    wd = london.weekday()
-    if wd >= 5:
-        return False
-    return (t >= dtime(8,0)) and (t < dtime(16,30))
+# ===============================
+# Configuración
+# ===============================
+st.set_page_config(
+    page_title="Trading Bot Visual Dashboard",
+    layout="wide",
+    page_icon="📊"
+)
 
-def badge_open(is_open: bool) -> str:
-    return "🟢 Abierto" if is_open else "🔴 Cerrado"
+st.title(f"📊 Trading Bot — Visual Dashboard ({estado_mercado()})")
+st.caption("Panel visual de señales y reportes • Archivo único: Bot2025Real.xlsx")
 
-# =========================
-# CARGA / GUARDA EXCEL
-# =========================
-@st.cache_data(show_spinner=False)
-def load_book_from_bytes(content: bytes) -> dict:
-    try:
-        xls = pd.ExcelFile(io.BytesIO(content))
-        out = {}
-        for name in ["signals","pending","performance","log"]:
-            if name in xls.sheet_names:
-                out[name] = pd.read_excel(xls, sheet_name=name)
-        base = create_blank_book()
-        for k,v in base.items():
-            if k not in out:
-                out[k] = v.copy()
-        return out
-    except Exception:
-        return create_blank_book()
+# ===============================
+# Cargar archivo
+# ===============================
+uploaded_file = st.file_uploader("📂 Sube el archivo Bot2025Real.xlsx generado por Colab", type="xlsx")
 
-def save_book_to_bytes(book: dict) -> bytes:
-    buf = io.BytesIO()
-    with pd.ExcelWriter(buf, engine="xlsxwriter") as writer:
-        for sheet, df in book.items():
-            ensure_columns(df, list(df.columns)).to_excel(writer, sheet_name=sheet, index=False)
-    buf.seek(0)
-    return buf.read()
+if uploaded_file is None:
+    st.warning("Por favor sube el archivo **Bot2025Real.xlsx** generado por Colab.")
+    st.stop()
 
-# =========================
-# DASHBOARD STREAMLIT
-# =========================
-st.set_page_config(page_title="Trading Bot Dashboard", page_icon="📈", layout="wide")
+# Leer todas las hojas del Excel
+xls = pd.ExcelFile(uploaded_file)
+signals = pd.read_excel(xls, sheet_name="signals")
+pending = pd.read_excel(xls, sheet_name="pending")
+performance = pd.read_excel(xls, sheet_name="performance")
+log = pd.read_excel(xls, sheet_name="log")
 
-st.title("📈 Trading Bot — Dashboard Visual")
-st.caption("Refresco automático cada 30s • Archivo único Bot2025Real.xlsx")
+# ===============================
+# Autorefresco cada 60s
+# ===============================
+auto_refresh_every(60, key="refresh_dashboard")
 
-# Sidebar
-with st.sidebar:
-    st.header("⚙️ Controles")
-    activos = st.multiselect("Activos prioritarios", DEFAULT_ASSETS, default=DEFAULT_ASSETS)
-    score_min = st.slider("Score mínimo (filtrado señales)", 0, 100, SCORE_MIN, 1)
-    st.write(f"Mercado NY: {badge_open(is_market_open_ny())} (Regular: {'🟢' if is_market_regular_nyse() else '🔴'})")
-    st.write(f"Mercado Londres: {badge_open(is_market_open_london())}")
-    st.divider()
-    st.write("📥 Sube tu Excel (deja vacío para usar plantilla):")
-    file = st.file_uploader("Bot2025Real.xlsx", type=["xlsx"], accept_multiple_files=False)
+# ===============================
+# Pestañas
+# ===============================
+tab1, tab2, tab3, tab4 = st.tabs(["📈 Señales", "⏳ Pending", "📊 Performance", "📜 Log"])
 
-# Cargar Excel
-if "book" not in st.session_state:
-    if file is not None:
-        book = load_book_from_bytes(file.read())
-    else:
-        book = create_blank_book()
-    st.session_state["book"] = book
-else:
-    if file is not None and file.size > 0:
-        st.session_state["book"] = load_book_from_bytes(file.read())
-
-book = st.session_state["book"]
-
-# =========================
-# GRÁFICO PRINCIPAL
-# =========================
-st.subheader("📊 Señales — Gráfico de distribución")
-df = book["signals"].copy()
-if not df.empty:
-    try:
-        df["score"] = pd.to_numeric(df["score"], errors="coerce").fillna(0)
-    except:
-        df["score"] = 0
-
-    counts = {
-        "Fuertes (≥80)": (df["score"] >= 80).sum(),
-        "Medias (60–79)": ((df["score"] >= 60) & (df["score"] < 80)).sum(),
-        "Básicas (40–59)": ((df["score"] >= 40) & (df["score"] < 60)).sum(),
-        "Débiles (<40)": (df["score"] < 40).sum()
-    }
-
-    fig, ax = plt.subplots()
-    ax.bar(counts.keys(), counts.values())
-    ax.set_title("Distribución de Señales")
-    ax.set_ylabel("Cantidad")
-    st.pyplot(fig)
-
-    st.markdown(f"**Última actualización:** {fmt_nj()}")
-else:
-    st.info("No hay señales en el Excel.")
-
-# =========================
-# PESTAÑAS
-# =========================
-tab1, tab2, tab3, tab4 = st.tabs(["⚡ Flash Report", "📝 Autoevaluación", "📉 Cierre", "⏱️ Heartbeat"])
-
+# --- Tab1: Señales
 with tab1:
-    st.subheader("⚡ Flash Report (Manual)")
-    st.write("En esta pestaña se mostrarán las últimas señales válidas (≥40).")
+    st.subheader("Últimas Señales (≥40)")
+    if signals.empty:
+        st.info("No hay señales registradas todavía.")
+    else:
+        signals["score"] = pd.to_numeric(signals["score"], errors="coerce").fillna(0)
+        valid = signals[signals["score"] >= 40]
+        if valid.empty:
+            st.warning("No hay señales con score ≥ 40.")
+        else:
+            st.dataframe(valid.tail(20))
+            # Gráfico de distribución
+            fig, ax = plt.subplots()
+            valid["score"].plot(kind="hist", bins=10, ax=ax, color="skyblue", edgecolor="black")
+            ax.set_title("Distribución de Scores (≥40)")
+            ax.set_xlabel("Score")
+            st.pyplot(fig)
 
+# --- Tab2: Pending
 with tab2:
-    st.subheader("📝 Autoevaluación (Manual)")
-    st.write("Narrativa automática basada en señales y contexto.")
+    st.subheader("⏳ Señales Pending (Pre/Confirmación)")
+    if pending.empty:
+        st.info("No hay señales pendientes.")
+    else:
+        st.dataframe(pending.tail(20))
 
+# --- Tab3: Performance
 with tab3:
-    st.subheader("📉 Reporte de Cierre")
-    st.write("Resumen de trades, ganancias/pérdidas y accuracy al final del día.")
+    st.subheader("📊 Rendimiento")
+    if performance.empty:
+        st.info("No hay datos de rendimiento aún.")
+    else:
+        st.dataframe(performance.tail(20))
+        # Accuracy simple
+        perf_today = performance.copy()
+        perf_today["accuracy"] = pd.to_numeric(perf_today["accuracy"], errors="coerce").fillna(0)
+        avg_acc = round(perf_today["accuracy"].mean(), 2)
+        st.metric("Promedio Accuracy", f"{avg_acc}%")
 
+# --- Tab4: Log
 with tab4:
-    st.subheader("⏱️ Heartbeat")
-    st.write("Mini reporte cada 10 minutos (sólo si el mercado está abierto).")
+    st.subheader("📜 Log de eventos")
+    if log.empty:
+        st.info("No hay eventos en el log.")
+    else:
+        st.dataframe(log.tail(50))
 
-# =========================
-# DESCARGA EXCEL
-# =========================
-st.divider()
-st.markdown("### 💾 Guardar cambios")
-bytes_xlsx = save_book_to_bytes(book)
+# ===============================
+# Descargar Excel actualizado
+# ===============================
+st.subheader("💾 Guardar cambios")
+output = io.BytesIO()
+with pd.ExcelWriter(output, engine="openpyxl") as writer:
+    signals.to_excel(writer, sheet_name="signals", index=False)
+    pending.to_excel(writer, sheet_name="pending", index=False)
+    performance.to_excel(writer, sheet_name="performance", index=False)
+    log.to_excel(writer, sheet_name="log", index=False)
+
 st.download_button(
-    "⬇️ Descargar Bot2025Real.xlsx",
-    data=bytes_xlsx,
+    label="⬇️ Descargar Bot2025Real.xlsx actualizado",
+    data=output.getvalue(),
     file_name="Bot2025Real.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
 )
-
-# =========================
-# REFRESCO AUTOMÁTICO
-# =========================
-st_autorefresh = st.experimental_rerun
-st_autorefresh = st.experimental_memo
-st_autorefresh
