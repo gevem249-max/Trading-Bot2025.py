@@ -1,144 +1,82 @@
-import io
-import pandas as pd
-import numpy as np
-import pytz
+# ========================================
+# 📊 Trading Bot — Visual Dashboard (Streamlit)
+# ========================================
+
 import streamlit as st
+import pandas as pd
 import matplotlib.pyplot as plt
-from datetime import datetime
+import os
 
-# =========================
-# CONFIG
-# =========================
-TZ_NJ = "America/New_York"
-XLSX_NAME = "Bot2025Real.xlsx"
+st.set_page_config(page_title="Trading Bot Dashboard", layout="wide")
 
-# =========================
-# UTILIDADES
-# =========================
-def now_nj():
-    return datetime.now(pytz.timezone(TZ_NJ))
-
-def fmt_nj(dt=None):
-    if dt is None:
-        dt = now_nj()
-    return dt.strftime("%m/%d/%Y %I:%M:%S %p")
-
-@st.cache_data(show_spinner=False)
-def load_book_from_bytes(content: bytes) -> dict:
-    try:
-        xls = pd.ExcelFile(io.BytesIO(content))
-        out = {}
-        for name in ["signals","pending","performance","log","intuition"]:
-            if name in xls.sheet_names:
-                out[name] = pd.read_excel(xls, sheet_name=name)
-        return out
-    except Exception:
-        return {}
-
-# =========================
-# UI STREAMLIT
-# =========================
-st.set_page_config(page_title="Trading Bot Dashboard", page_icon="📊", layout="wide")
-
+# --- Título ---
 st.title("📊 Trading Bot — Visual Dashboard")
-st.caption("Panel visual de señales y reportes • Archivo único: Bot2025Real.xlsx")
+st.write("Panel visual de señales y reportes • Archivo único: **Bot2025Real.xlsx**")
 
-# Sidebar
-with st.sidebar:
-    st.header("⚙️ Configuración")
-    file = st.file_uploader("📥 Subir Bot2025Real.xlsx", type=["xlsx"])
-    st.info("Sube el archivo Excel actualizado desde Colab")
+# --- Subida del archivo ---
+uploaded_file = st.file_uploader("📂 Sube el archivo Bot2025Real.xlsx generado por Colab", type=["xlsx"])
 
-if file is None:
-    st.warning("Por favor sube el archivo Bot2025Real.xlsx generado por Colab.")
+if uploaded_file is None:
+    st.warning("Por favor sube el archivo **Bot2025Real.xlsx** generado por Colab.")
     st.stop()
 
-# Cargar datos
-book = load_book_from_bytes(file.read())
-signals = book.get("signals", pd.DataFrame())
-performance = book.get("performance", pd.DataFrame())
-log = book.get("log", pd.DataFrame())
+# --- Leer hojas ---
+try:
+    signals = pd.read_excel(uploaded_file, sheet_name="signals")
+    performance = pd.read_excel(uploaded_file, sheet_name="performance")
+    log = pd.read_excel(uploaded_file, sheet_name="log")
+except Exception as e:
+    st.error(f"Error al leer el archivo: {e}")
+    st.stop()
 
-# =========================
-# PANTALLA PRINCIPAL — SEÑALES
-# =========================
-st.subheader(f"📈 Señales recientes — Hora NJ: {fmt_nj()}")
+# ========================================
+# 📊 Panel de Señales
+# ========================================
+st.header("📊 Señales recientes")
 
 if signals.empty:
-    st.info("No hay señales registradas todavía.")
+    st.info("No hay señales registradas aún.")
 else:
-    signals["score"] = pd.to_numeric(signals.get("score", pd.Series()), errors="coerce").fillna(0)
-    signals["date"] = pd.to_datetime(signals.get("date", pd.Series()), errors="coerce")
+    # Mostrar últimas 20
+    st.subheader("📋 Últimas 20 señales")
+    st.dataframe(signals.tail(20))
 
-    last = signals.tail(50)
-
-    # Gráfico barras
-    fig, ax = plt.subplots(figsize=(10,5))
-    ax.bar(last.index.astype(str), last["score"], color="skyblue")
-    ax.axhline(80, color="green", linestyle="--", label="Alta probabilidad (≥80)")
-    ax.axhline(40, color="orange", linestyle="--", label="Mínimo aceptado (≥40)")
-    ax.set_title("📊 Scores de las últimas señales")
-    ax.set_ylabel("Score")
-    ax.set_xlabel("Últimas señales")
-    ax.legend()
-    plt.xticks(rotation=45)
-
+    # Histograma de scores
+    st.subheader("📊 Distribución de scores")
+    fig, ax = plt.subplots(figsize=(6,4))
+    signals["score"].dropna().astype(float).hist(bins=20, ax=ax, color="skyblue", edgecolor="black")
+    ax.set_title("Distribución de Scores")
+    ax.set_xlabel("Score")
+    ax.set_ylabel("Frecuencia")
     st.pyplot(fig)
 
-    # Tabla
-    st.markdown("### 📋 Tabla de señales recientes")
-    st.dataframe(
-        last[["symbol","alias","tf","direction","score","entry","tp","sl","contracts","date","time","result"]],
-        use_container_width=True,
-        height=300
-    )
-
-# =========================
-# RENDIMIENTO DIARIO — PERFORMANCE
-# =========================
-st.subheader("📊 Rendimiento diario")
+# ========================================
+# 📈 Panel de Performance
+# ========================================
+st.header("📈 Performance acumulada")
 
 if performance.empty:
-    st.info("No hay datos de performance registrados.")
+    st.info("No hay datos de performance aún.")
 else:
-    performance["date"] = pd.to_datetime(performance.get("date", pd.Series()), errors="coerce")
+    perf = performance.copy()
+    perf["profit"] = pd.to_numeric(perf["profit"], errors="coerce").fillna(0)
+    perf["cumulative_profit"] = perf["profit"].cumsum()
 
-    today = now_nj().date()
-    df_today = performance[performance["date"].dt.date == today]
+    fig, ax = plt.subplots(figsize=(8,4))
+    ax.plot(perf["cumulative_profit"], marker="o", linestyle="-", color="green")
+    ax.set_title("Curva de Profit Acumulado")
+    ax.set_xlabel("Operaciones")
+    ax.set_ylabel("Profit acumulado")
+    st.pyplot(fig)
 
-    if df_today.empty:
-        st.info("No hay operaciones registradas para hoy.")
-    else:
-        wins = pd.to_numeric(df_today["wins"], errors="coerce").fillna(0).sum()
-        losses = pd.to_numeric(df_today["losses"], errors="coerce").fillna(0).sum()
-        profit = pd.to_numeric(df_today["profit"], errors="coerce").fillna(0).sum()
+# ========================================
+# 📜 Log de Eventos
+# ========================================
+st.header("📜 Log de eventos")
 
-        # Gráfico pastel
-        fig2, ax2 = plt.subplots()
-        ax2.pie(
-            [wins, losses],
-            labels=["Ganados","Perdidos"],
-            autopct="%1.1f%%",
-            startangle=90,
-            colors=["#4CAF50","#F44336"]
-        )
-        ax2.set_title("📊 Distribución de resultados hoy")
-        st.pyplot(fig2)
-
-        # Tabla performance
-        st.markdown("### 📋 Detalle de performance hoy")
-        st.dataframe(
-            df_today[["time","symbol","tf","trades","wins","losses","profit","accuracy"]],
-            use_container_width=True,
-            height=300
-        )
-
-# =========================
-# LOG
-# =========================
-st.divider()
-st.markdown("### 📜 Log de eventos")
 if log.empty:
-    st.info("Sin eventos registrados aún.")
+    st.info("No hay eventos registrados aún.")
 else:
-    st.dataframe(log.tail(100), use_container_width=True, height=200)
+    st.dataframe(log.tail(30))  # Últimos 30 eventos
+
+st.success("✅ Dashboard cargado correctamente")
