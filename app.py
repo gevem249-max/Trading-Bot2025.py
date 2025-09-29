@@ -1,145 +1,88 @@
-# ===============================
-# Trading Bot Visual Dashboard
-# Streamlit completo (con estado de mercado)
-# ===============================
-
+# app.py
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-import time
-import io
 from datetime import datetime, time as dtime
 
-# ===============================
-# Función de Autorefresco
-# ===============================
-def auto_refresh_every(seconds: int, key: str = "auto_refresh_tick"):
-    """
-    Vuelve a ejecutar la app cada 'seconds' segundos sin usar experimental_rerun.
-    """
-    now = int(time.time())
-    last = st.session_state.get(key, now)
-    if key not in st.session_state:
-        st.session_state[key] = now
-    elif (now - last) >= seconds:
-        st.session_state[key] = now
-        st.rerun()
+st.set_page_config(page_title="Trading Bot Dashboard", layout="wide")
 
-# ===============================
-# Estado del mercado (NYSE)
-# ===============================
+# ==========================
+# Funciones auxiliares
+# ==========================
 def is_nyse_open(dt=None):
+    """NYSE: 9:30–17:00 ET (Lun–Vie)"""
     if dt is None:
-        dt = datetime.now()
-    if dt.weekday() >= 5:  # sábado y domingo
+        dt = datetime.utcnow()  # simplificado, puedes ajustar a tz NY
+    if dt.weekday() >= 5:  # 5=Sat, 6=Sun
         return False
-    start = dtime(9,30)
-    end   = dtime(17,0)
-    return start <= dt.time() <= end
+    start, end = dtime(14, 30), dtime(21, 0)  # UTC ≈ 9:30–17:00 ET
+    t = dt.time()
+    return start <= t <= end
 
-def estado_mercado():
-    return "🟢 ABIERTO" if is_nyse_open() else "🔴 CERRADO"
+def plot_signals(df):
+    """Generar gráfico de señales"""
+    fig, ax = plt.subplots(figsize=(7,3))
+    df["score"].plot(kind="bar", ax=ax, color="skyblue", edgecolor="black")
+    ax.set_title("Distribución de Scores (≥40)")
+    ax.set_xlabel("Señales")
+    ax.set_ylabel("Score")
+    st.pyplot(fig)
 
-# ===============================
-# Configuración
-# ===============================
-st.set_page_config(
-    page_title="Trading Bot Visual Dashboard",
-    layout="wide",
-    page_icon="📊"
-)
+# ==========================
+# Interfaz principal
+# ==========================
+st.title("📊 Trading Bot — Visual Dashboard")
 
-st.title(f"📊 Trading Bot — Visual Dashboard ({estado_mercado()})")
-st.caption("Panel visual de señales y reportes • Archivo único: Bot2025Real.xlsx")
+estado = "🟢 ABIERTO" if is_nyse_open() else "🔴 CERRADO"
+st.markdown(f"**Estado del mercado NYSE:** {estado}")
 
-# ===============================
-# Cargar archivo
-# ===============================
-uploaded_file = st.file_uploader("📂 Sube el archivo Bot2025Real.xlsx generado por Colab", type="xlsx")
+uploaded_file = st.file_uploader("📂 Sube tu archivo Bot2025Real.xlsx", type="xlsx")
 
-if uploaded_file is None:
-    st.warning("Por favor sube el archivo **Bot2025Real.xlsx** generado por Colab.")
-    st.stop()
+if uploaded_file is not None:
+    try:
+        # Leer todo el archivo Excel
+        data = pd.read_excel(uploaded_file, sheet_name=None)
+        st.success("✅ Archivo cargado correctamente")
 
-# Leer todas las hojas del Excel
-xls = pd.ExcelFile(uploaded_file)
-signals = pd.read_excel(xls, sheet_name="signals")
-pending = pd.read_excel(xls, sheet_name="pending")
-performance = pd.read_excel(xls, sheet_name="performance")
-log = pd.read_excel(xls, sheet_name="log")
+        # Crear pestañas
+        tab1, tab2, tab3 = st.tabs(["⚡ Señales", "📜 Log", "📈 Performance"])
 
-# ===============================
-# Autorefresco cada 60s
-# ===============================
-auto_refresh_every(60, key="refresh_dashboard")
+        # --- TAB 1: Señales ---
+        with tab1:
+            if "signals" in data:
+                st.subheader("⚡ Señales válidas (score ≥ 40)")
+                df = data["signals"].copy()
 
-# ===============================
-# Pestañas
-# ===============================
-tab1, tab2, tab3, tab4 = st.tabs(["📈 Señales", "⏳ Pending", "📊 Performance", "📜 Log"])
+                if not df.empty:
+                    df_valid = df[pd.to_numeric(df["score"], errors="coerce") >= 40]
+                    st.dataframe(df_valid)
 
-# --- Tab1: Señales
-with tab1:
-    st.subheader("Últimas Señales (≥40)")
-    if signals.empty:
-        st.info("No hay señales registradas todavía.")
-    else:
-        signals["score"] = pd.to_numeric(signals["score"], errors="coerce").fillna(0)
-        valid = signals[signals["score"] >= 40]
-        if valid.empty:
-            st.warning("No hay señales con score ≥ 40.")
-        else:
-            st.dataframe(valid.tail(20))
-            # Gráfico de distribución
-            fig, ax = plt.subplots()
-            valid["score"].plot(kind="hist", bins=10, ax=ax, color="skyblue", edgecolor="black")
-            ax.set_title("Distribución de Scores (≥40)")
-            ax.set_xlabel("Score")
-            st.pyplot(fig)
+                    if not df_valid.empty:
+                        plot_signals(df_valid)
+                    else:
+                        st.info("No hay señales con score ≥ 40.")
+                else:
+                    st.warning("La hoja 'signals' está vacía.")
+            else:
+                st.error("❌ No existe la hoja 'signals' en el archivo.")
 
-# --- Tab2: Pending
-with tab2:
-    st.subheader("⏳ Señales Pending (Pre/Confirmación)")
-    if pending.empty:
-        st.info("No hay señales pendientes.")
-    else:
-        st.dataframe(pending.tail(20))
+        # --- TAB 2: Log ---
+        with tab2:
+            if "log" in data:
+                st.subheader("📜 Log de eventos")
+                st.dataframe(data["log"].tail(30))
+            else:
+                st.error("❌ No existe la hoja 'log' en el archivo.")
 
-# --- Tab3: Performance
-with tab3:
-    st.subheader("📊 Rendimiento")
-    if performance.empty:
-        st.info("No hay datos de rendimiento aún.")
-    else:
-        st.dataframe(performance.tail(20))
-        # Accuracy simple
-        perf_today = performance.copy()
-        perf_today["accuracy"] = pd.to_numeric(perf_today["accuracy"], errors="coerce").fillna(0)
-        avg_acc = round(perf_today["accuracy"].mean(), 2)
-        st.metric("Promedio Accuracy", f"{avg_acc}%")
+        # --- TAB 3: Performance ---
+        with tab3:
+            if "performance" in data:
+                st.subheader("📈 Rendimiento")
+                st.dataframe(data["performance"].tail(30))
+            else:
+                st.error("❌ No existe la hoja 'performance' en el archivo.")
 
-# --- Tab4: Log
-with tab4:
-    st.subheader("📜 Log de eventos")
-    if log.empty:
-        st.info("No hay eventos en el log.")
-    else:
-        st.dataframe(log.tail(50))
-
-# ===============================
-# Descargar Excel actualizado
-# ===============================
-st.subheader("💾 Guardar cambios")
-output = io.BytesIO()
-with pd.ExcelWriter(output, engine="openpyxl") as writer:
-    signals.to_excel(writer, sheet_name="signals", index=False)
-    pending.to_excel(writer, sheet_name="pending", index=False)
-    performance.to_excel(writer, sheet_name="performance", index=False)
-    log.to_excel(writer, sheet_name="log", index=False)
-
-st.download_button(
-    label="⬇️ Descargar Bot2025Real.xlsx actualizado",
-    data=output.getvalue(),
-    file_name="Bot2025Real.xlsx",
-    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-)
+    except Exception as e:
+        st.error(f"⚠️ Error leyendo archivo: {e}")
+else:
+    st.warning("Por favor sube el archivo Bot2025Real.xlsx generado por Colab.")
