@@ -6,3 +6,4 @@ xlsxwriter
 openpyxl
 scikit-learn
 statsmodels
+matplotlib
