@@ -1,95 +1,91 @@
+# =====================================
+# 📊 Trading Bot — Visual Dashboard
+# Versión corregida (sin streamlit_autorefresh)
+# =====================================
+
 import streamlit as st
 import pandas as pd
 import matplotlib.pyplot as plt
-from streamlit_autorefresh import st_autorefresh
+import time
+from datetime import datetime, time as dtime
 
-# =========================
-# CONFIGURACIÓN INICIAL
-# =========================
-st.set_page_config(page_title="Trading Bot Dashboard", page_icon="📈", layout="wide")
+# -----------------------------
+# 🔹 Funciones auxiliares
+# -----------------------------
+def is_nyse_open():
+    """Determina si el mercado NYSE está abierto (9:30–17:00 ET, Lun–Vie)."""
+    now = datetime.now()
+    if now.weekday() >= 5:  # sábado(5) o domingo(6)
+        return False
+    start = dtime(9, 30)
+    end = dtime(17, 0)
+    return start <= now.time() <= end
+
+def load_data(uploaded_file):
+    try:
+        df = pd.read_excel(uploaded_file, sheet_name="signals")
+        df["score"] = pd.to_numeric(df["score"], errors="coerce").fillna(0)
+        return df
+    except Exception:
+        return pd.DataFrame()
+
+# -----------------------------
+# 🔹 Configuración de la página
+# -----------------------------
+st.set_page_config(page_title="Trading Bot Dashboard", layout="wide")
+
+# -----------------------------
+# 🔹 Estado del mercado
+# -----------------------------
+estado = "🟢 ABIERTO" if is_nyse_open() else "🔴 CERRADO"
 st.title("📈 Trading Bot — Visual Dashboard")
+st.subheader(f"Estado del mercado NYSE: {estado}")
 
-# 🔄 Auto-refresco cada 60s
-st_autorefresh(interval=60 * 1000, key="refresh")
-
-# =========================
-# SUBIDA DE ARCHIVO
-# =========================
+# -----------------------------
+# 🔹 Subida de archivo
+# -----------------------------
 uploaded_file = st.file_uploader("📂 Sube tu archivo Bot2025Real.xlsx", type=["xlsx"])
 
-if uploaded_file is not None:
-    try:
-        # Leer todas las hojas
-        book = pd.read_excel(uploaded_file, sheet_name=None)
+if uploaded_file:
+    df = load_data(uploaded_file)
 
-        st.success("✅ Archivo cargado correctamente.")
-        st.write("Hojas disponibles:", list(book.keys()))
+    if not df.empty:
+        # Filtrar señales válidas
+        valid = df[df["score"] >= 40].copy()
 
-        # =========================
-        # VISUALIZACIÓN DE SEÑALES
-        # =========================
-        if "signals" in book:
-            df_signals = book["signals"]
+        st.markdown("### 📊 Señales válidas (score ≥ 40)")
+        st.dataframe(valid.tail(20))  # últimas 20 señales
 
-            if not df_signals.empty:
-                st.subheader("📊 Señales registradas")
+        # -----------------------------
+        # 🔹 Gráfico de distribución
+        # -----------------------------
+        st.markdown("### 📈 Distribución de señales por score")
 
-                # Mostrar últimas 20
-                st.dataframe(df_signals.tail(20), use_container_width=True)
+        fig, ax = plt.subplots()
+        valid["score"].plot(kind="hist", bins=20, ax=ax, color="skyblue", edgecolor="black")
+        ax.set_title("Distribución de Score de Señales")
+        ax.set_xlabel("Score")
+        ax.set_ylabel("Frecuencia")
+        st.pyplot(fig)
 
-                # ====== Gráfico de señales por Score ======
-                fig, ax = plt.subplots()
-                df_signals["score"].dropna().astype(float).plot(
-                    kind="hist", bins=20, ax=ax, alpha=0.7
-                )
-                ax.set_title("Distribución de Scores de Señales")
-                ax.set_xlabel("Score")
-                ax.set_ylabel("Cantidad")
-                st.pyplot(fig)
-            else:
-                st.info("No hay señales registradas en la hoja `signals`.")
-        else:
-            st.warning("⚠️ La hoja `signals` no está en el archivo.")
+        # Guardar cambios (botón manual)
+        if st.button("💾 Guardar cambios"):
+            valid.to_excel("Bot2025Real.xlsx", index=False)
+            st.success("✅ Archivo actualizado correctamente.")
 
-        # =========================
-        # VISUALIZACIÓN DE PERFORMANCE
-        # =========================
-        if "performance" in book:
-            df_perf = book["performance"]
-
-            if not df_perf.empty:
-                st.subheader("📈 Rendimiento acumulado")
-                st.dataframe(df_perf.tail(20), use_container_width=True)
-
-                # Gráfico de profit acumulado
-                if "profit" in df_perf.columns:
-                    fig2, ax2 = plt.subplots()
-                    df_perf["profit"].dropna().astype(float).cumsum().plot(ax=ax2)
-                    ax2.set_title("Evolución de Profit acumulado")
-                    ax2.set_xlabel("Operaciones")
-                    ax2.set_ylabel("Profit acumulado")
-                    st.pyplot(fig2)
-            else:
-                st.info("No hay datos de rendimiento en la hoja `performance`.")
-        else:
-            st.warning("⚠️ La hoja `performance` no está en el archivo.")
-
-        # =========================
-        # LOGS
-        # =========================
-        if "log" in book:
-            df_log = book["log"]
-
-            if not df_log.empty:
-                st.subheader("📜 Últimos eventos")
-                st.dataframe(df_log.tail(20), use_container_width=True, height=300)
-            else:
-                st.info("El log está vacío.")
-        else:
-            st.warning("⚠️ La hoja `log` no está en el archivo.")
-
-    except Exception as e:
-        st.error(f"❌ Error al leer el Excel: {e}")
-
+    else:
+        st.warning("⚠️ No se pudieron leer señales en el archivo.")
 else:
-    st.warning("Por favor sube el archivo **Bot2025Real.xlsx** generado por Colab.")
+    st.info("Por favor sube el archivo Bot2025Real.xlsx generado por Colab.")
+
+# -----------------------------
+# 🔹 Refresco automático nativo
+# -----------------------------
+placeholder = st.empty()
+if "last_refresh" not in st.session_state:
+    st.session_state.last_refresh = time.time()
+
+# Cada 60 segundos refresca
+if time.time() - st.session_state.last_refresh > 60:
+    st.session_state.last_refresh = time.time()
+    st.experimental_rerun()
