@@ -11,3 +11,8 @@ gspread
 google-auth
 google-auth-oauthlib
 google-auth-httplib2
+pyyaml
+schedule
+gspread
+oauth2client
+yfinance
