@@ -1,11 +1,11 @@
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import streamlit as st
+import pandas as pd
 
-# Leer secrets desde Streamlit
+# Leer service account desde secrets
 service_account_info = dict(st.secrets["gp"])
 
-# Autenticación con Google Sheets
 scope = [
     "https://spreadsheets.google.com/feeds",
     "https://www.googleapis.com/auth/drive"
@@ -13,18 +13,17 @@ scope = [
 creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
 client = gspread.authorize(creds)
 
-# Abrir hoja
-SPREADSHEET_ID = st.secrets["gp"].get("spreadsheet_id", "1yTd7l9NYvruWPJ4rgNSHQPsqE4o22F0_lvvBWhD1LbM")
+# Usar spreadsheet_id del secret
+SPREADSHEET_ID = st.secrets["gp"]["spreadsheet_id"]
 sheet = client.open_by_key(SPREADSHEET_ID)
 
-# UI
-st.title("🚀 Trading Bot 2025")
-st.success("✅ Conectado a Google Sheets correctamente")
+st.title("🚀 Trading Bot 2025 conectado")
+st.success("✅ Conexión con Google Sheets lista")
 
-# Probar lectura
+# Mostrar contenido
 try:
     ws = sheet.sheet1
     data = ws.get_all_records()
-    st.write("📊 Primeras filas:", data[:5])
+    st.dataframe(pd.DataFrame(data).head())
 except Exception as e:
-    st.error(f"❌ Error leyendo Google Sheets: {e}")
+    st.error(f"❌ Error leyendo hoja: {e}")
