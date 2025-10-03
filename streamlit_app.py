@@ -1,90 +1,65 @@
-# ========================================
-# 📊 Trading Bot Dashboard (Streamlit)
-# ========================================
-
 import streamlit as st
-import gspread
-from oauth2client.service_account import ServiceAccountCredentials
 import pandas as pd
-from datetime import datetime, time as dtime, timedelta
+import numpy as np
+import pytz
+from datetime import datetime
+import gspread
+from google.oauth2.service_account import Credentials
 
-# ==============================
-# ⚙️ CONFIGURACIÓN GOOGLE SHEETS
-# ==============================
-SERVICE_ACCOUNT_FILE = "service_account.json"   # ya lo tienes en tu repo
+# ==================================
+# 📌 CONFIGURACIÓN
+# ==================================
 SPREADSHEET_ID = "1yTd7l9NYvruWPJ4rgNSHQPsqE4o22F0_lvvBWhD1LbM"
 
-scope = [
-    "https://spreadsheets.google.com/feeds",
-    "https://www.googleapis.com/auth/drive",
-]
-
-creds = ServiceAccountCredentials.from_json_keyfile_name(SERVICE_ACCOUNT_FILE, scope)
+# Cargar credenciales desde Secrets
+creds = Credentials.from_service_account_info(st.secrets["gcp_service_account"])
 client = gspread.authorize(creds)
 sheet = client.open_by_key(SPREADSHEET_ID)
 
-# ==============================
-# 🕒 UTILIDADES HORARIOS
-# ==============================
-def now_et():
-    return datetime.now()
+# ==================================
+# 📌 FUNCIONES DE UTILIDAD
+# ==================================
+def hora_local_nj():
+    tz = pytz.timezone("America/New_York")
+    return datetime.now(tz).strftime("%m/%d/%Y %I:%M:%S %p")
 
-def is_nyse_open(dt=None):
-    if dt is None: dt = now_et()
-    if dt.weekday() >= 5: return False
-    return dtime(9,30) <= dt.time() <= dtime(16,0)
+def estado_mercados():
+    nyse = "ABIERTO" if 9 <= datetime.now().hour < 16 else "CERRADO"
+    mes = "ABIERTO"  # ejemplo: futuros 24h
+    londres = "ABIERTO" if 3 <= datetime.now().hour < 11 else "CERRADO"
+    return nyse, mes, londres
 
-def is_mes_open(dt=None):
-    if dt is None: dt = now_et()
-    wd = dt.weekday()
-    if wd == 5: return False
-    if wd == 6: return dt.time() >= dtime(18,0)
-    return True
+# ==================================
+# 📌 INTERFAZ STREAMLIT
+# ==================================
+st.set_page_config(page_title="Trading Bot Dashboard", page_icon="🤖")
 
-def is_lse_open(dt=None):
-    if dt is None: dt = now_et()
-    london = dt + timedelta(hours=5)  # NJ vs Londres
-    return london.weekday() < 5 and dtime(8,0) <= london.time() <= dtime(16,30)
+st.title("🤖 Trading Bot — Dashboard")
+st.write("Panel visual de señales y reportes conectados a Google Sheets.")
 
-# ==============================
-# 📊 DASHBOARD STREAMLIT
-# ==============================
-st.set_page_config(page_title="Trading Bot Dashboard", layout="centered")
-
-st.title("🤖 Trading Bot — Visual Dashboard")
-st.write("Panel visual de señales y reportes conectado a Google Sheets")
-
-# Estado de los mercados
-st.subheader("🌍 Estado de los Mercados")
+# Estado actual
+nyse, mes, londres = estado_mercados()
 st.markdown(f"""
-- **Hora local NJ:** {now_et().strftime("%m/%d/%Y %I:%M:%S %p")}
-- **NYSE:** {"🟢 ABIERTO" if is_nyse_open() else "🔴 CERRADO"}
-- **MES (futuros):** {"🟢 ABIERTO" if is_mes_open() else "🔴 CERRADO"}
-- **Londres:** {"🟢 ABIERTO" if is_lse_open() else "🔴 CERRADO"}
+### ⏰ Hora local NJ: {hora_local_nj()}
+
+- **NYSE:** {nyse}  
+- **MES (futuros):** {mes}  
+- **Londres:** {londres}  
 """)
 
-# Leer señales
-st.subheader("📈 Últimas señales")
+# ==================================
+# 📌 LECTURA DE HOJA DE GOOGLE SHEETS
+# ==================================
 try:
-    ws = sheet.worksheet("signals")
+    ws = sheet.worksheet("log")
     data = ws.get_all_records()
     df = pd.DataFrame(data)
     if not df.empty:
-        st.dataframe(df.tail(10))  # mostrar las últimas 10 señales
+        st.subheader("📊 Últimos eventos registrados")
+        st.dataframe(df.tail(10))
     else:
-        st.info("No hay señales registradas todavía.")
+        st.info("No hay datos aún en la hoja 'log'.")
 except Exception as e:
-    st.error(f"No se pudieron leer las señales: {e}")
+    st.error(f"Error al leer Google Sheets: {e}")
 
-# Log de eventos
-st.subheader("📝 Log de eventos")
-try:
-    ws_log = sheet.worksheet("log")
-    data_log = ws_log.get_all_records()
-    df_log = pd.DataFrame(data_log)
-    if not df_log.empty:
-        st.dataframe(df_log.tail(15))
-    else:
-        st.info("No hay eventos registrados todavía.")
-except Exception as e:
-    st.error(f"No se pudo leer el log: {e}")
+st.success("✅ Bot en Streamlit listo y conectado")
