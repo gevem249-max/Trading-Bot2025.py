@@ -2,9 +2,8 @@ name: TradingBot
 
 on:
   schedule:
-    # Corre cada hora al minuto 0
-    - cron: "0 * * * *"
-  workflow_dispatch: {}  # Para correr manualmente
+    - cron: "0 * * * *"   # corre cada hora
+  workflow_dispatch: {}   # lo puedes lanzar manualmente
 
 jobs:
   run-bot:
@@ -22,8 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
-          pip install gspread oauth2client pytz pandas
+          pip install gspread oauth2client pandas pytz
 
       - name: Run bot
         env:
@@ -32,19 +30,14 @@ jobs:
           GMAIL_USER:         ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS:     ${{ secrets.GMAIL_APP_PASS }}
         run: |
-          python bot.py
-          import os, ssl, smtplib, json
+          cat > bot.py <<'EOF'
+import os, ssl, smtplib, json
 from email.mime.text import MIMEText
 from email.mime.multipart import MIMEMultipart
 from datetime import datetime, timedelta
-import pytz
-import gspread
+import pytz, gspread, pandas as pd
 from oauth2client.service_account import ServiceAccountCredentials
-import pandas as pd
 
-# =========================
-#   FUNCIONES HORARIO
-# =========================
 TZ_NY = pytz.timezone("America/New_York")
 
 def now_et():
@@ -63,11 +56,8 @@ def market_status(dt):
     ld_close_t = london.replace(hour=16, minute=30, second=0, microsecond=0)
     london_open = (london.weekday() < 5) and (london >= ld_open_t and london <= ld_close_t)
 
-    return nyse_open, True, london_open  # NYSE, MES (24h), Londres
+    return nyse_open, True, london_open
 
-# =========================
-#   EMAIL
-# =========================
 def send_email(subject, html, to_addrs):
     user = os.environ["GMAIL_USER"]
     app_pass = os.environ["GMAIL_APP_PASS"]
@@ -83,9 +73,6 @@ def send_email(subject, html, to_addrs):
         server.login(user, app_pass)
         server.sendmail(user, to_addrs, msg.as_string())
 
-# =========================
-#   GOOGLE SHEETS
-# =========================
 def get_sheet_client():
     sa_json = os.environ["GCP_SERVICE_ACCOUNT"]
     info = json.loads(sa_json)
@@ -104,22 +91,15 @@ def load_signals():
         df["score"] = pd.to_numeric(df["score"], errors="coerce")
     return df
 
-# =========================
-#   REPORTE HORARIO
-# =========================
 def build_hourly_report(df):
     now = now_et()
-    one_hour_ago = now - timedelta(hours=1)
-
     if "time" in df.columns:
         try:
             df["time"] = pd.to_datetime(df["time"], errors="coerce")
         except:
             pass
-
     recent = df.tail(20)
     low_conf = recent[recent["score"] < 80] if "score" in df.columns else pd.DataFrame()
-
     nyse_open, mes_open, london_open = market_status(now)
 
     def table_html(df_small, title):
@@ -128,7 +108,7 @@ def build_hourly_report(df):
         cols = [c for c in ["time","symbol","alias","tf","direction","score"] if c in df_small.columns]
         return f"<h4>{title}</h4>" + df_small[cols].to_html(index=False, border=1)
 
-    html = f"""
+    return f"""
     <h3>📈 Reporte horario del bot</h3>
     <p><b>Hora ET:</b> {fmt_dt(now)}</p>
     <ul>
@@ -139,7 +119,6 @@ def build_hourly_report(df):
     {table_html(recent, "Últimas señales")}
     {table_html(low_conf, "⚠️ Señales con score < 80")}
     """
-    return html
 
 def main():
     df = load_signals()
@@ -148,3 +127,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+EOF
+          python bot.py
