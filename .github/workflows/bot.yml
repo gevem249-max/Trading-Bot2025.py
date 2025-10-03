@@ -2,8 +2,8 @@ name: Trading Bot
 
 on:
   schedule:
-    - cron: "0 * * * *"  # cada hora
-  workflow_dispatch:
+    - cron: "*/15 * * * *"   # corre cada 15 minutos
+  workflow_dispatch:        # permite lanzarlo manualmente
 
 jobs:
   run-bot:
@@ -12,7 +12,7 @@ jobs:
       - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
@@ -22,7 +22,6 @@ jobs:
 
       - name: Run bot
         env:
-          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          GCP_SERVICE_ACCOUNT: ${{ secrets.GCP_SERVICE_ACCOUNT }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          SERVICE_ACCOUNT_JSON: ${{ secrets.SERVICE_ACCOUNT_JSON }}
         run: python app.py
