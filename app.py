@@ -2,11 +2,21 @@ import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
 import streamlit as st
-import pandas as pd
-import pytz
-from datetime import datetime, time as dtime
-import matplotlib.pyplot as plt
 
+# Cargar credenciales desde Secrets
+SERVICE_ACCOUNT_JSON = st.secrets["service_account_json"]["json"]
+service_account_info = json.loads(SERVICE_ACCOUNT_JSON)
+
+# Autenticación con Google Sheets
+scope = ["https://spreadsheets.google.com/feeds", "https://www.googleapis.com/auth/drive"]
+creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
+client = gspread.authorize(creds)
+
+# Abrir tu Google Sheet
+SPREADSHEET_ID = "1yTd7l9NYvruWPJ4rgNSHQPsqE4o22F0_lvvBWhD1LbM"
+sheet = client.open_by_key(SPREADSHEET_ID)
+
+st.success("✅ Conectado a Google Sheets correctamente")
 # ==============================
 # 🔑 Autenticación Google Sheets
 # ==============================
