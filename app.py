@@ -1,77 +1,82 @@
 import streamlit as st
-import json
 import gspread
 from oauth2client.service_account import ServiceAccountCredentials
-import smtplib, ssl
+import smtplib
 from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
-from datetime import datetime
+import pandas as pd
 
-# ==============================
-# 📂 CONFIG
-# ==============================
-GMAIL_USER = st.secrets["GMAIL_USER"]        # tu correo Gmail
-GMAIL_PASS = st.secrets["GMAIL_APP_PASS"]    # App Password de Gmail
-SPREADSHEET_ID = st.secrets["SPREADSHEET_ID"]  # ID de Google Sheets
-SERVICE_ACCOUNT_JSON = st.secrets["GCP_SERVICE_ACCOUNT"]  # JSON en secrets
+# ==========================
+# 1. Configuración inicial
+# ==========================
 
-# ==============================
-# ⏰ UTILIDADES
-# ==============================
-def hora_local():
-    return datetime.now().strftime("%m/%d/%Y %I:%M:%S %p")
+# Gmail credentials desde secrets
+GMAIL_USER = st.secrets["GMAIL_USER"]
+GMAIL_PASS = st.secrets["GMAIL_PASS"]
 
-# ==============================
-# 📊 GOOGLE SHEETS
-# ==============================
-service_account_info = json.loads(SERVICE_ACCOUNT_JSON)
+# Spreadsheet ID desde secrets
+SPREADSHEET_ID = st.secrets["SPREADSHEET_ID"]
 
-scope = ["https://spreadsheets.google.com/feeds", 
-         "https://www.googleapis.com/auth/drive"]
+# Service account desde secrets
+service_account_info = dict(st.secrets["service_account"])
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
+]
 creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
 client = gspread.authorize(creds)
 
-sheet = client.open_by_key(SPREADSHEET_ID)
-ws_log = sheet.worksheet("log")
+# ==========================
+# 2. Google Sheets
+# ==========================
 
-def log(event, details=""):
-    ws_log.append_row([hora_local(), event, details])
+try:
+    sheet = client.open_by_key(SPREADSHEET_ID).sheet1
+    data = sheet.get_all_records()
+    df = pd.DataFrame(data)
+    st.success("✅ Conectado a Google Sheets correctamente")
+except Exception as e:
+    st.error(f"❌ Error conectando a Google Sheets: {e}")
+    df = pd.DataFrame()
 
-# ==============================
-# 📧 CORREO
-# ==============================
-def send_email(subject, body, to_email):
+# ==========================
+# 3. UI Streamlit
+# ==========================
+
+st.title("🚀 Trading Bot 2025")
+st.write("Este bot está conectado a Google Sheets y Gmail vía secrets.")
+
+if not df.empty:
+    st.subheader("📊 Primeras filas de la hoja:")
+    st.write(df.head())
+else:
+    st.warning("⚠️ No hay datos cargados en la hoja.")
+
+# ==========================
+# 4. Envío de correo (prueba)
+# ==========================
+
+def enviar_correo(destinatario, asunto, mensaje):
     try:
-        msg = MIMEMultipart("alternative")
+        msg = MIMEText(mensaje)
+        msg["Subject"] = asunto
         msg["From"] = GMAIL_USER
-        msg["To"] = to_email
-        msg["Subject"] = subject
-        msg.attach(MIMEText(body, "html"))
+        msg["To"] = destinatario
 
-        context = ssl.create_default_context()
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465, context=context) as server:
-            server.login(GMAIL_USER, GMAIL_PASS)
-            server.sendmail(GMAIL_USER, [to_email], msg.as_string())
-
-        log("email_sent", f"{subject} -> {to_email}")
+        server = smtplib.SMTP_SSL("smtp.gmail.com", 465)
+        server.login(GMAIL_USER, GMAIL_PASS)
+        server.sendmail(GMAIL_USER, [destinatario], msg.as_string())
+        server.quit()
         return True
     except Exception as e:
-        log("email_error", str(e))
+        st.error(f"❌ Error enviando correo: {e}")
         return False
 
-# ==============================
-# 🚀 STREAMLIT UI
-# ==============================
-st.title("🚀 Trading Bot 2025")
-st.success("✅ Conectado a Google Sheets correctamente")
-
-if st.button("Enviar correo de prueba"):
-    ok = send_email("📈 Bot Activo", f"<p>El bot fue activado a las {hora_local()}</p>", GMAIL_USER)
-    if ok:
-        st.success("✅ Correo enviado con éxito")
+st.subheader("📧 Enviar un correo de prueba")
+email = st.text_input("Correo destino:", "")
+if st.button("Enviar prueba"):
+    if email:
+        ok = enviar_correo(email, "Prueba Trading Bot 2025", "✅ El bot está funcionando y conectado correctamente.")
+        if ok:
+            st.success("Correo enviado con éxito.")
     else:
-        st.error("❌ Error al enviar correo")
-
-if st.button("Ver últimos logs"):
-    logs = ws_log.get_all_records()
-    st.dataframe(logs[-10:] if logs else [])
+        st.warning("⚠️ Ingresa un correo válido.")
