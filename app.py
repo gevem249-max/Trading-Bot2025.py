@@ -1,120 +1,76 @@
-import os, ssl, smtplib, time, threading, schedule, json
-from datetime import datetime, timedelta, time as dtime
-import pandas as pd
+import json
 import gspread
-from google.oauth2.service_account import Credentials
-from email.mime.text import MIMEText
-from email.mime.multipart import MIMEMultipart
+from oauth2client.service_account import ServiceAccountCredentials
+import streamlit as st
+import pandas as pd
+import matplotlib.pyplot as plt
+from datetime import datetime
 
-# ==============================
-# CONFIG
-# ==============================
-PRIMARY_EMAIL   = "gevem249@gmail.com"
-SECONDARY_EMAIL = "adri_touma@hotmail.com"
-USER_EMAIL      = PRIMARY_EMAIL
-APP_PASS        = os.getenv("GMAIL_APP_PASS")  # Guardado en GitHub Secrets
-
-SPREADSHEET_ID  = os.getenv("SPREADSHEET_ID")  # Guardado en GitHub Secrets
-SERVICE_ACCOUNT_JSON = os.getenv("SERVICE_ACCOUNT_JSON")
-
-# ==============================
-# AUTH GOOGLE SHEETS
-# ==============================
+# ==========================
+# 🔑 Cargar credenciales desde secrets
+# ==========================
+SERVICE_ACCOUNT_JSON = st.secrets["google_service_account"]["json"]
 service_account_info = json.loads(SERVICE_ACCOUNT_JSON)
-creds = Credentials.from_service_account_info(
-    service_account_info,
-    scopes=[
-        "https://www.googleapis.com/auth/spreadsheets",
-        "https://www.googleapis.com/auth/drive"
-    ]
-)
+
+scope = [
+    "https://spreadsheets.google.com/feeds",
+    "https://www.googleapis.com/auth/drive"
+]
+
+creds = ServiceAccountCredentials.from_json_keyfile_dict(service_account_info, scope)
 client = gspread.authorize(creds)
+
+# ==========================
+# 📊 Conectar al Google Sheet
+# ==========================
+SPREADSHEET_ID = "1yTd7l9NYvruWPJ4rgNSHQPsqE4o22F0_lvvBWhD1LbM"
 sheet = client.open_by_key(SPREADSHEET_ID)
 
-# ==============================
-# FUNCIONES DE TIEMPO
-# ==============================
-def now_local():
-    return datetime.now()
+st.title("📈 Trading Bot Dashboard")
+st.success("✅ Conectado a Google Sheets correctamente")
 
-def hora_local_mdY_hms():
-    return now_local().strftime("%m/%d/%Y %I:%M:%S %p")
-
-def is_nyse_open(dt=None):
-    if dt is None: dt = now_local()
-    if dt.weekday() >= 5: return False
-    return dtime(9,30) <= dt.time() <= dtime(16,0)
-
-def is_mes_open(dt=None):
-    if dt is None: dt = now_local()
-    wd = dt.weekday()
-    if wd == 5: return False
-    if wd == 6: return dt.time() >= dtime(18,0)
-    return True
-
-def is_lse_open(dt=None):
-    if dt is None: dt = now_local()
-    london = dt + timedelta(hours=5)
-    return london.weekday() < 5 and dtime(8,0) <= london.time() <= dtime(16,30)
-
-# ==============================
-# EMAIL
-# ==============================
-def send_email_html(subject, body, recipients):
-    msg = MIMEMultipart("alternative")
-    msg["From"], msg["To"], msg["Subject"] = USER_EMAIL, ", ".join(recipients), subject
-    msg.attach(MIMEText(body,"html"))
-    context = ssl.create_default_context()
-    with smtplib.SMTP_SSL("smtp.gmail.com",465,context=context) as server:
-        server.login(USER_EMAIL, APP_PASS)
-        server.sendmail(USER_EMAIL, recipients, msg.as_string())
-
-def send_all(subject, html): 
-    send_email_html(subject, html, [PRIMARY_EMAIL])
-
-# ==============================
-# TAREAS BOT
-# ==============================
-def evaluar_senales():
+# ==========================
+# 📄 Leer datos
+# ==========================
+def get_df(sheet_name):
     try:
-        ws = sheet.worksheet("signals")
-        df = pd.DataFrame(ws.get_all_records())
-        if df.empty:
-            return
-        # ejemplo: filtrar señales <80
-        bajas = df[df["score"].astype(float) < 80]
-        resumen = f"Total señales bajas: {len(bajas)}"
-        send_all("📊 Reporte Señales", f"<p>{resumen}</p>")
+        ws = sheet.worksheet(sheet_name)
+        data = ws.get_all_records()
+        return pd.DataFrame(data)
     except Exception as e:
-        send_all("❌ Error Bot", str(e))
+        st.warning(f"No se pudo leer la hoja {sheet_name}: {e}")
+        return pd.DataFrame()
 
-def start_sched():
-    schedule.every(1).hours.do(evaluar_senales)  # 👈 cada hora
-    evaluar_senales()  # primera vez
+signals_df = get_df("signals")
+pending_df = get_df("pending")
+perf_df = get_df("performance")
+log_df = get_df("log")
 
-def loop_sched():
-    while True:
-        schedule.run_pending()
-        time.sleep(1)
+# ==========================
+# 📊 Mostrar gráficos
+# ==========================
+st.header("📊 Señales")
+if not signals_df.empty:
+    st.dataframe(signals_df.tail(20))
+    fig, ax = plt.subplots()
+    signals_df["score"].plot(kind="hist", bins=10, ax=ax)
+    ax.set_title("Distribución de Scores")
+    st.pyplot(fig)
+else:
+    st.info("No hay datos en 'signals'.")
 
-# ==============================
-# RUN
-# ==============================
-def run_bot():
-    body = f"""
-    <h3>🤖 Bot Activado</h3>
-    <p>Hora local NJ: {hora_local_mdY_hms()}</p>
-    <ul>
-    <li>NYSE: {"ABIERTO" if is_nyse_open() else "CERRADO"}</li>
-    <li>MES (futuros): {"ABIERTO" if is_mes_open() else "CERRADO"}</li>
-    <li>Londres: {"ABIERTO" if is_lse_open() else "CERRADO"}</li>
-    </ul>
-    """
-    send_all("🤖 Bot Activado", body)
-    start_sched()
-    threading.Thread(target=loop_sched, daemon=True).start()
+st.header("⏳ Pendientes")
+st.dataframe(pending_df.tail(20) if not pending_df.empty else pd.DataFrame())
 
-if __name__ == "__main__":
-    run_bot()
-    while True:
-        time.sleep(60)
+st.header("📉 Performance")
+if not perf_df.empty:
+    st.dataframe(perf_df.tail(20))
+    fig, ax = plt.subplots()
+    perf_df.groupby("date")["profit"].sum().plot(kind="bar", ax=ax)
+    ax.set_title("Profit diario")
+    st.pyplot(fig)
+else:
+    st.info("No hay datos en 'performance'.")
+
+st.header("📜 Log de eventos")
+st.dataframe(log_df.tail(30) if not log_df.empty else pd.DataFrame())
