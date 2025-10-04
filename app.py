@@ -10,14 +10,14 @@ import matplotlib.pyplot as plt
 # Conexión con Google Sheets
 # ==============================
 def conectar_sheets():
-    google_json = os.getenv("GCP_SERVICE_ACCOUNT")  # Secret en Streamlit/GitHub
+    google_json = os.getenv("GOOGLE_SHEETS_JSON")  # Aquí va tu secret en GitHub
     creds_info = json.loads(google_json)
     creds = Credentials.from_service_account_info(
         creds_info,
         scopes=["https://www.googleapis.com/auth/spreadsheets"]
     )
     client = gspread.authorize(creds)
-    spreadsheet_id = os.getenv("SPREADSHEET_ID")
+    spreadsheet_id = os.getenv("SPREADSHEET_ID")  # Aquí va tu ID de hoja
     sheet = client.open_by_key(spreadsheet_id).sheet1
     return sheet
 
