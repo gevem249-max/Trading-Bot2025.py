@@ -1,8 +1,8 @@
 streamlit
 gspread
 google-auth
-google-auth-oauthlib
-google-auth-httplib2
-imaplib2
+yfinance
 pandas
+pandas_ta
 matplotlib
+requests
