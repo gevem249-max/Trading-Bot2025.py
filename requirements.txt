@@ -9,6 +9,11 @@ matplotlib
 gspread
 google-auth
 
+# Gmail envío (SMTP ya es built-in en Python, no requiere extra)
+
 # Streamlit Panel
 streamlit
 streamlit-autorefresh
+
+# Seguridad adicional para parsing JSON (incluido en stdlib pero mejor fijar)
+python-dateutil
