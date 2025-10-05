@@ -1,7 +1,8 @@
 streamlit
+streamlit-autorefresh
 gspread
+google-auth
 pandas
+numpy
 matplotlib
 yfinance
-numpy
-streamlit-autorefresh
