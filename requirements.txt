@@ -1,19 +1,16 @@
 # requirements.txt
 
-# --- Core ---
+# Core
 pandas
 numpy
 yfinance
 pytz
 matplotlib
 
-# --- Google Sheets ---
+# Google Sheets
 gspread
 google-auth
 
-# --- Email ---
-smtplib-client   # opcional, si falla se puede quitar (ya usas smtplib estándar de Python)
-
-# --- Streamlit Panel ---
+# Streamlit Panel
 streamlit
 streamlit-autorefresh
