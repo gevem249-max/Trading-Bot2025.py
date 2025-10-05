@@ -27,4 +27,5 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
         run: |
+          echo "🚀 Ejecutando recalibrate.py"
           python recalibrate.py
