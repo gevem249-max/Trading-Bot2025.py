@@ -1,32 +1,31 @@
-name: Recalibrate Bot Weights
+name: Recalibrate Bot
 
 on:
-  workflow_dispatch:    # manual
   schedule:
-    - cron: "30 23 * * *"   # todos los días a las 23:30 UTC
+    - cron: "0 */6 * * *"   # cada 6 horas
+  workflow_dispatch:
 
 jobs:
   recalibrate:
     runs-on: ubuntu-latest
-
     steps:
-      - name: 📥 Checkout repo
+      - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: 🐍 Setup Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      - name: 📦 Install dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 🔄 Run recalibration
+      - name: Run recalibration
         env:
-          GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
         run: |
