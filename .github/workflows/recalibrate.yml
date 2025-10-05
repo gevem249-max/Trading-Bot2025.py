@@ -2,8 +2,8 @@ name: Recalibrate Bot
 
 on:
   schedule:
-    - cron: "5 1 * * *"   # 01:05 UTC todos los días (ajústalo si quieres)
-  workflow_dispatch:      # correr manual
+    - cron: "0 */6 * * *"   # cada 6 horas
+  workflow_dispatch:
 
 jobs:
   recalibrate:
@@ -22,11 +22,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Recalibrate
+      - name: Run recalibration
         env:
-          GMAIL_USER:        ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASS:    ${{ secrets.GMAIL_APP_PASS }}
-          GOOGLE_SHEETS_JSON:${{ secrets.GOOGLE_SHEETS_JSON }}
-          SPREADSHEET_ID:    ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: |
-          python bot.py --recalibrate
+          python -c "from bot import recalibrate_weights_from_sheet; print(recalibrate_weights_from_sheet())"
