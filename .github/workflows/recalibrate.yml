@@ -2,7 +2,7 @@ name: Recalibrate Bot
 
 on:
   schedule:
-    - cron: "0 */6 * * *"
+    - cron: "0 */6 * * *"   # cada 6 horas
   workflow_dispatch:
 
 jobs:
@@ -26,25 +26,5 @@ jobs:
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
         run: |
-          python - <<'PY'
-          import traceback
-          try:
-              from bot import recalibrate_weights_from_sheet
-              print("✅ Ejecutando bot.recalibrate_weights_from_sheet()")
-              res = recalibrate_weights_from_sheet()
-              print("Resultado:", res)
-          except Exception as e:
-              print("⚠️ Error:", e)
-              traceback.print_exc()
-              try:
-                  import recalibrate as rc
-                  print("↩️ Fallback a recalibrate.recalibrate()")
-                  rc.recalibrate()
-              except Exception as e2:
-                  print("❌ También falló:", e2)
-                  traceback.print_exc()
-                  raise SystemExit(1)
-          PY
+          python recalibrate.py
