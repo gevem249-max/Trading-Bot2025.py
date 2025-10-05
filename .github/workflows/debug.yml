@@ -20,7 +20,7 @@ jobs:
           python -m pip install --upgrade pip
           pip install gspread google-auth pandas
 
-      - name: Print secrets presence (no valores)
+      - name: Print secrets presence
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
@@ -28,7 +28,7 @@ jobs:
           if [ -z "${SPREADSHEET_ID}" ]; then echo "SPREADSHEET_ID=⛔"; else echo "SPREADSHEET_ID=✅"; fi
           if [ -z "${GOOGLE_SHEETS_JSON}" ]; then echo "GOOGLE_SHEETS_JSON=⛔"; else echo "GOOGLE_SHEETS_JSON=✅"; fi
 
-      - name: Try read first row from Google Sheet (non-fatal)
+      - name: Try read first row
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
@@ -41,7 +41,7 @@ jobs:
           sid = os.getenv("SPREADSHEET_ID")
           js = os.getenv("GOOGLE_SHEETS_JSON")
           if not sid or not js:
-              print("⛔ Falta secreto: no se intenta leer")
+              print("⛔ Falta secreto")
               raise SystemExit(0)
           creds = Credentials.from_service_account_info(json.loads(js), scopes=["https://www.googleapis.com/auth/spreadsheets"])
           gc = gspread.authorize(creds)
