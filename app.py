@@ -1,4 +1,4 @@
-# streamlit_app.py
+# app.py — Panel de señales Trading Bot
 import os, json, pytz, datetime as dt
 import pandas as pd
 import gspread
@@ -31,7 +31,7 @@ def is_market_open(market: str, t: dt.datetime) -> bool:
     minutes = h * 60 + m
 
     if market == "equity":
-        if wd >= 5:  # Sab-Dom
+        if wd >= 5:
             return False
         return (9*60 + 30) <= minutes < (16*60)
 
@@ -74,34 +74,32 @@ def load_data() -> pd.DataFrame:
 # 🎨 Dashboard
 # =========================
 st.set_page_config(page_title="Panel de Señales", layout="wide")
+
+# Hora local y estado de mercados en la PRIMERA línea
+hora_actual = now_et()
+labels = {
+    "equity": "Equities",
+    "cme_micro": "CME Micros",
+    "forex": "Forex",
+    "crypto": "Crypto",
+}
+
+st.markdown("### ⏰ Hora local (ET): " + hora_actual.strftime("%Y-%m-%d %H:%M:%S"))
+
+cols = st.columns(4)
+for i, mkt in enumerate(["equity","cme_micro","forex","crypto"]):
+    opened = is_market_open(mkt, hora_actual)
+    icon = "🟢" if opened else "🔴"
+    status = "Abierto" if opened else "Cerrado"
+    with cols[i]:
+        st.markdown(f"**{labels[mkt]}**")
+        st.markdown(f"{icon} **{status}**")
+
+# Título principal
 st.title("📊 Panel de Señales - Trading Bot 2025")
 
 # Estado del bot
 st.success("😊 Bot Activo – corriendo en tiempo real")
-
-# Hora actual y mercados en la misma fila
-hora_actual = now_et()
-col_time, col_markets = st.columns([1,3])
-
-with col_time:
-    st.write(f"🕒 **Hora local (NJ/ET):** {hora_actual.strftime('%Y-%m-%d %H:%M:%S')}")
-
-with col_markets:
-    st.subheader("📡 Mercados en tiempo real (ET)")
-    labels = {
-        "equity": "Equities (NYSE/Nasdaq)",
-        "cme_micro": "Futuros CME Micros",
-        "forex": "Forex (FX)",
-        "crypto": "Crypto (24/7)",
-    }
-    cols = st.columns(4)
-    for i, mkt in enumerate(["equity","cme_micro","forex","crypto"]):
-        opened = is_market_open(mkt, hora_actual)
-        icon = "🟢" if opened else "🔴"
-        status = "Abierto" if opened else "Cerrado"
-        with cols[i]:
-            st.markdown(f"**{labels[mkt]}**")
-            st.markdown(f"{icon} **{status}**")
 
 # Cargar datos
 df = load_data()
@@ -118,7 +116,7 @@ tabs = st.tabs([
     "🕒 Últimas Señales"
 ])
 
-# 1. Señales enviadas (≥80%)
+# 1. Señales enviadas
 with tabs[0]:
     sent = df[df["Estado"].isin(["Pre","Confirmada"])]
     st.subheader("✅ Señales enviadas (≥80%)")
@@ -127,7 +125,7 @@ with tabs[0]:
     else:
         st.dataframe(sent)
 
-# 2. Descartadas (<80%)
+# 2. Descartadas
 with tabs[1]:
     disc = df[df["Estado"]=="Descartada"]
     st.subheader("❌ Señales descartadas (<80%)")
@@ -136,7 +134,7 @@ with tabs[1]:
     else:
         st.dataframe(disc)
 
-# 3. Resultados de hoy + gráfico Win/Loss
+# 3. Resultados de hoy
 with tabs[2]:
     st.subheader("📈 Resultados de Hoy")
     today = hora_actual.strftime("%Y-%m-%d")
@@ -145,8 +143,6 @@ with tabs[2]:
         st.warning("⚠️ No hay resultados hoy.")
     else:
         st.dataframe(today_df)
-
-        # Gráfico de Win/Loss (hoy)
         winloss_data = today_df.groupby(["Resultado"]).size()
         fig, ax = plt.subplots()
         winloss_data.plot(kind="bar", color=["green","red","gray"], ax=ax)
@@ -201,7 +197,6 @@ else:
     col2.metric("Ganadas", int(result_counts.get("Win", 0)))
     col3.metric("Winrate (%)", f"{winrate}%")
 
-    # Gráfico 1: Señales por Ticker
     st.subheader("📌 Señales por Ticker")
     fig1, ax1 = plt.subplots()
     ticker_counts.plot(kind="bar", color="skyblue", ax=ax1)
@@ -209,7 +204,6 @@ else:
     ax1.set_ylabel("Señales")
     st.pyplot(fig1)
 
-    # Gráfico 2: Resultados (Win/Loss)
     st.subheader("🏆 Distribución de Resultados")
     fig2, ax2 = plt.subplots()
     ordered = [c for c in ["Win","Loss","-"] if c in result_counts.index] + \
