@@ -20,3 +20,4 @@ streamlit-autorefresh
 # Opcionales útiles para análisis / debugging (recomendados)
 ipython
 tqdm
+mplfinance
