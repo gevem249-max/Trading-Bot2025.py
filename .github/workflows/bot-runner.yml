@@ -3,11 +3,12 @@ name: Run Trading Bot
 on:
   schedule:
     - cron: "*/5 * * * *"   # cada 5 minutos (UTC)
-  workflow_dispatch:        # para ejecutarlo manual
+  workflow_dispatch:        # para lanzarlo manualmente
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -24,13 +25,11 @@ jobs:
 
       - name: Run bot (check confirmations)
         env:
-          GMAIL_USER:        ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASS:    ${{ secrets.GMAIL_APP_PASS }}
-          GOOGLE_SHEETS_JSON:${{ secrets.GOOGLE_SHEETS_JSON }}
-          SPREADSHEET_ID:    ${{ secrets.SPREADSHEET_ID }}
-          ALERT_DKNG:        ${{ secrets.ALERT_DKNG }}
-          ALERT_MICROS:      ${{ secrets.ALERT_MICROS }}
-          ALERT_DEFAULT:     ${{ secrets.ALERT_DEFAULT }}
-        run: |
-          python bot.py --check-confirmations
-          # Si quieres pruebas: python bot.py --demo
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
+          ALERT_MICROS: ${{ secrets.ALERT_MICROS }}
+          ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
+        run: python bot.py --check-confirmations
