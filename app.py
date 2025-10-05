@@ -6,10 +6,9 @@ import streamlit as st
 import matplotlib.pyplot as plt
 
 # =========================
-# 🔧 Config
+# 🔧 Configuración
 # =========================
 TZ = pytz.timezone("America/New_York")
-
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 GS_JSON = json.loads(os.getenv("GOOGLE_SHEETS_JSON"))
 CREDS = Credentials.from_service_account_info(GS_JSON, scopes=["https://www.googleapis.com/auth/spreadsheets"])
@@ -17,47 +16,25 @@ GC = gspread.authorize(CREDS)
 SHEET = GC.open_by_key(SPREADSHEET_ID).sheet1
 
 # =========================
-# 🧭 Funciones auxiliares
+# 🧭 Funciones
 # =========================
 def now_et():
     return dt.datetime.now(TZ)
 
-def is_market_open(market: str, t: dt.datetime) -> bool:
-    wd = t.weekday()
-    h, m = t.hour, t.minute
-    if market == "equity":
-        if wd >= 5: return False
-        return (9*60+30) <= (h*60+m) < (16*60)
-    if market == "cme_micro":
-        if wd == 5: return False
-        if wd == 6 and h < 18: return False
-        if wd == 4 and h >= 17: return False
-        if h == 17: return False
-        return True
-    if market == "forex":
-        if wd == 5: return False
-        if wd == 6 and h < 17: return False
-        if wd == 4 and h >= 17: return False
-        return True
-    if market == "crypto":
-        return True
-    return False
-
 def load_data():
-    values = SHEET.get_all_records()
-    if not values:
-        return pd.DataFrame(columns=[
-            "FechaISO","HoraLocal","Ticker","Side","Entrada",
-            "Prob_1m","Prob_5m","Prob_15m","Prob_1h","ProbFinal",
-            "Estado","Resultado","Nota","Mercado"
-        ])
-    return pd.DataFrame(values)
+    try:
+        values = SHEET.get_all_records()
+        if not values:
+            return pd.DataFrame()
+        return pd.DataFrame(values)
+    except Exception as e:
+        st.error(f"⚠️ Error cargando datos: {e}")
+        return pd.DataFrame()
 
 # =========================
-# 🎨 Dashboard
+# 🎨 Interfaz Streamlit
 # =========================
-st.set_page_config(page_title="Panel de Señales", layout="wide")
-
+st.set_page_config(page_title="Panel Trading Bot", layout="wide")
 st.title("📊 Panel de Señales - Trading Bot 2025")
 
 # Estado del bot
@@ -65,14 +42,7 @@ st.success("😊 Bot Activo – corriendo en tiempo real")
 
 # Hora local
 hora_actual = now_et()
-st.write(f"🕒 **Hora local (NJ/ET):** {hora_actual.strftime('%Y-%m-%d %H:%M:%S')}")
-
-# Estado de mercados
-st.subheader("Mercados ahora:")
-for mkt in ["equity","cme_micro","forex","crypto"]:
-    abierto = is_market_open(mkt, hora_actual)
-    color = "🟢" if abierto else "🔴"
-    st.write(f"{color} {mkt.upper()} {'abierto' if abierto else 'cerrado'}")
+st.write(f"🕒 **Hora local (ET):** {hora_actual.strftime('%Y-%m-%d %H:%M:%S')}")
 
 # Cargar datos
 df = load_data()
@@ -80,76 +50,35 @@ df = load_data()
 # =========================
 # 📑 Tabs
 # =========================
-tabs = st.tabs([
-    "✅ Señales Enviadas",
-    "❌ Descartadas",
-    "📈 Resultados Hoy",
-    "📊 Histórico",
-    "📉 Distribución Probabilidades",
-    "🕒 Últimas Señales"
-])
+tabs = st.tabs(["✅ Señales", "📈 Resultados Hoy", "📊 Histórico"])
 
-# 1. Señales enviadas (≥80%)
+# 1. Señales
 with tabs[0]:
-    sent = df[df["Estado"].isin(["Pre","Confirmada"])]
-    st.subheader("✅ Señales enviadas (≥80%)")
-    if sent.empty:
-        st.warning("⚠️ No hay señales enviadas registradas.")
+    st.subheader("✅ Señales registradas")
+    if df.empty:
+        st.warning("⚠️ No hay datos.")
     else:
-        st.dataframe(sent)
+        st.dataframe(df)
 
-# 2. Descartadas (<80%)
+# 2. Resultados de hoy
 with tabs[1]:
-    disc = df[df["Estado"]=="Descartada"]
-    st.subheader("❌ Señales descartadas (<80%)")
-    if disc.empty:
-        st.warning("⚠️ No hay señales descartadas.")
-    else:
-        st.dataframe(disc)
-
-# 3. Resultados de hoy + gráfico Win/Loss
-with tabs[2]:
     st.subheader("📈 Resultados de Hoy")
     today = hora_actual.strftime("%Y-%m-%d")
-    today_df = df[df["FechaISO"]==today]
+    today_df = df[df["FechaISO"] == today] if not df.empty else pd.DataFrame()
     if today_df.empty:
         st.warning("⚠️ No hay resultados hoy.")
     else:
         st.dataframe(today_df)
-
-        # Gráfico de Win/Loss por probabilidad
-        winloss_data = today_df.groupby(["Resultado"]).size()
+        winloss = today_df["Resultado"].value_counts()
         fig, ax = plt.subplots()
-        winloss_data.plot(kind="bar", color=["green","red","gray"], ax=ax)
+        winloss.plot(kind="bar", color=["green","red"], ax=ax)
         ax.set_title("Resultados Win/Loss (Hoy)")
-        ax.set_ylabel("Cantidad")
         st.pyplot(fig)
 
-# 4. Histórico (todo el sheet)
-with tabs[3]:
+# 3. Histórico
+with tabs[2]:
     st.subheader("📊 Histórico Completo")
     if df.empty:
         st.warning("⚠️ No hay histórico todavía.")
     else:
         st.dataframe(df)
-
-# 5. Distribución de probabilidades
-with tabs[4]:
-    st.subheader("📉 Distribución de Probabilidades")
-    if df.empty:
-        st.warning("⚠️ No hay datos de probabilidades.")
-    else:
-        fig, ax = plt.subplots()
-        df["ProbFinal"].hist(bins=20, ax=ax, color="skyblue", edgecolor="black")
-        ax.set_title("Distribución de Probabilidades")
-        ax.set_xlabel("Probabilidad final")
-        ax.set_ylabel("Frecuencia")
-        st.pyplot(fig)
-
-# 6. Últimas señales
-with tabs[5]:
-    st.subheader("🕒 Últimas Señales Registradas")
-    if df.empty:
-        st.warning("⚠️ No hay señales recientes.")
-    else:
-        st.dataframe(df.tail(10))
