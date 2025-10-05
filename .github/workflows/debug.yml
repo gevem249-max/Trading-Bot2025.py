@@ -1,35 +1,36 @@
 name: Debug Bot
 
 on:
-  workflow_dispatch:   # Se ejecuta manualmente desde Actions
+  workflow_dispatch:
 
 jobs:
   debug:
     runs-on: ubuntu-latest
+
     steps:
-      - name: 📥 Checkout repo
+      - name: Checkout repo
         uses: actions/checkout@v3
 
-      - name: 🐍 Configurar Python
+      - name: Set up Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      - name: 📦 Instalar dependencias
+      - name: Install dependencies (debug)
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 🚀 Ejecutar bot en modo debug
+      - name: Run Debug Script
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-          ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
-          ALERT_MICROS: ${{ secrets.ALERT_MICROS }}
-          ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
         run: |
-          echo "===== INICIO DEBUG ====="
-          python bot.py --debug
-          echo "===== FIN DEBUG ====="
+          python - <<'EOF'
+          import sys
+          import pandas, numpy, yfinance, gspread
+          print("✅ Debug: librerías importadas correctamente")
+          from bot import process_signal
+          row = process_signal("DKNG","Buy",45.3)
+          print("✅ Señal de prueba guardada:", row)
+          EOF
