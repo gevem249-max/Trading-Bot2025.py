@@ -130,7 +130,7 @@ def prob_multi_frame(ticker: str, side: str, weights=None) -> dict:
     return {"per_frame":probs,"final":final}
 
 # =========================
-# Sniper extra
+# Sniper extra (MACD, patrones, ATR, soportes)
 # =========================
 def atr(df, period=14):
     if df is None or df.empty: return 0.0
@@ -294,62 +294,6 @@ def check_pending_confirmations():
             pf2 = sn["final"]
             estado2 = "Confirmado" if pf2>=80 else "Cancelado"
             SHEET.update_cell(idx, HEADERS.index("Estado")+1, estado2)
-
-# =========================
-# 🔄 Recalibración de Pesos
-# =========================
-def recalibrate_weights_from_sheet(n_recent=500, alpha=0.25):
-    """
-    Recalibra los pesos usando los últimos n registros del Google Sheet.
-    Ajusta w_base, w_pat, w_macd, w_sr y guarda en la hoja 'meta'.
-    alpha = 0.25 controla cuánto se mezclan los nuevos pesos con los anteriores.
-    """
-    try:
-        rows = SHEET.get_all_records()
-        if not rows:
-            return None
-        df = pd.DataFrame(rows).tail(n_recent)
-
-        needed_cols = ["ProbFinal","pat_score","macd_val","sr_score","Resultado"]
-        if not all(c in df.columns for c in needed_cols):
-            print("⚠️ Columnas insuficientes para recalibrar")
-            return None
-
-        df = df.dropna(subset=["Resultado"])
-        df["y"] = df["Resultado"].apply(lambda x: 1 if str(x).strip().lower()=="win" else 0)
-        if df["y"].sum() == 0:
-            print("⚠️ No hay suficientes operaciones ganadoras para recalibrar")
-            return None
-
-        cors = {
-            "base": abs(df["ProbFinal"].corr(df["y"]) or 0),
-            "pat":  abs(df["pat_score"].corr(df["y"]) or 0),
-            "macd": abs(df["macd_val"].corr(df["y"]) or 0),
-            "sr":   abs(df["sr_score"].corr(df["y"]) or 0)
-        }
-        s = sum(cors.values()) + 1e-9
-        norm = {k: cors[k]/s for k in cors}
-
-        sm = {
-            "w_base": round(alpha*norm["base"] + (1-alpha)*0.5,3),
-            "w_pat":  round(alpha*norm["pat"]  + (1-alpha)*0.2,3),
-            "w_macd": round(alpha*norm["macd"] + (1-alpha)*0.15,3),
-            "w_sr":   round(alpha*norm["sr"]   + (1-alpha)*0.15,3),
-            "ts": now_et().isoformat()
-        }
-
-        try:
-            ws = GC.open_by_key(SPREADSHEET_ID).worksheet("meta")
-        except gspread.WorksheetNotFound:
-            ws = GC.open_by_key(SPREADSHEET_ID).add_worksheet("meta", 100, 20)
-            ws.update("A1", [["w_base","w_pat","w_macd","w_sr","ts"]])
-        ws.append_row([sm["w_base"], sm["w_pat"], sm["w_macd"], sm["w_sr"], sm["ts"]])
-
-        print("✅ Recalibración completada:", sm)
-        return sm
-    except Exception as e:
-        print("⚠️ Error recalibrate:", e)
-        return None
 
 # =========================
 # ▶️ Main
