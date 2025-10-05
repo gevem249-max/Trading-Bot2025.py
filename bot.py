@@ -1,5 +1,5 @@
-# bot.py — Trading-Bot completo con Sniper + recalibración + confirmaciones programadas
-import os, json, re, pytz, datetime as dt, smtplib
+# bot.py — Trading-Bot completo con Sniper + Recalibración + Confirmaciones + Debug
+import os, json, re, pytz, datetime as dt, smtplib, sys
 from email.mime.text import MIMEText
 
 import pandas as pd
@@ -46,6 +46,9 @@ ALERT_DKNG = os.getenv("ALERT_DKNG")
 ALERT_MICROS = os.getenv("ALERT_MICROS")
 ALERT_DEFAULT = os.getenv("ALERT_DEFAULT", GMAIL_USER)
 
+# Debug flag
+DEBUG_MODE = "--debug" in sys.argv
+
 # =========================
 # 🧭 Tiempo y mercado
 # =========================
@@ -73,6 +76,7 @@ def send_mail_many(subject: str, body: str, to_emails: str):
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
         srv.login(GMAIL_USER, GMAIL_PASS)
         srv.sendmail(GMAIL_USER, recipients, msg.as_string())
+    log_debug({"event":"email_sent","to":to_emails,"subject":subject})
 
 # =========================
 # 📈 Indicadores
@@ -130,7 +134,7 @@ def prob_multi_frame(ticker: str, side: str, weights=None) -> dict:
     return {"per_frame":probs,"final":final}
 
 # =========================
-# Sniper extra (MACD, patrones, ATR, soportes)
+# Sniper extra
 # =========================
 def atr(df, period=14):
     if df is None or df.empty: return 0.0
@@ -229,42 +233,21 @@ def find_rows(filter_fn):
     return out
 
 # =========================
-# Recalibración de Pesos
+# Debug logging
 # =========================
-def recalibrate_weights_from_sheet(n_recent=500, alpha=0.25):
+def log_debug(row_dict: dict):
     try:
-        rows = SHEET.get_all_records()
-        if not rows: return None
-        df = pd.DataFrame(rows).tail(n_recent)
-        needed_cols = ["ProbFinal","pat_score","macd_val","sr_score","Resultado"]
-        if not all(c in df.columns for c in needed_cols): return None
-        df = df.dropna(subset=["Resultado"])
-        df["y"] = df["Resultado"].apply(lambda x: 1 if str(x).strip().lower()=="win" else 0)
-        if df["y"].sum() == 0: return None
-        cors = {
-            "base": abs(df["ProbFinal"].corr(df["y"]) or 0),
-            "pat":  abs(df["pat_score"].corr(df["y"]) or 0),
-            "macd": abs(df["macd_val"].corr(df["y"]) or 0),
-            "sr":   abs(df["sr_score"].corr(df["y"]) or 0)
-        }
-        s = sum(cors.values()) + 1e-9
-        norm = {k: cors[k]/s for k in cors}
-        sm = {
-            "w_base": round(alpha*norm["base"] + (1-alpha)*0.5,3),
-            "w_pat":  round(alpha*norm["pat"]  + (1-alpha)*0.2,3),
-            "w_macd": round(alpha*norm["macd"] + (1-alpha)*0.15,3),
-            "w_sr":   round(alpha*norm["sr"]   + (1-alpha)*0.15,3),
-            "ts": now_et().isoformat()
-        }
+        if DEBUG_MODE:
+            print("DEBUG:", row_dict)
         try:
-            ws = GC.open_by_key(SPREADSHEET_ID).worksheet("meta")
+            dbg = GC.open_by_key(SPREADSHEET_ID).worksheet("debug")
         except gspread.WorksheetNotFound:
-            ws = GC.open_by_key(SPREADSHEET_ID).add_worksheet("meta", 100, 20)
-            ws.update("A1", [["w_base","w_pat","w_macd","w_sr","ts"]])
-        ws.append_row([sm["w_base"], sm["w_pat"], sm["w_macd"], sm["w_sr"], sm["ts"]])
-        return sm
-    except Exception:
-        return None
+            dbg = GC.open_by_key(SPREADSHEET_ID).add_worksheet(title="debug", rows=2000, cols=40)
+            dbg.update("A1", [list(row_dict.keys())])
+        dbg.append_row([str(row_dict.get(k,"")) for k in row_dict.keys()])
+    except Exception as e:
+        if DEBUG_MODE:
+            print("⚠️ Debug logging failed:", e)
 
 # =========================
 # Core process_signal
@@ -310,6 +293,7 @@ def process_signal(ticker: str, side: str, entry: float):
         "SL": sl,"TP": tp,"Recipients": recipients,"ScheduledConfirm": scheduled_confirm
     }
     append_signal(row)
+    log_debug({"event":"signal","row":row})
 
     if estado=="Pre" and recipients:
         send_mail_many(f"📊 Pre-señal {ticker} {side} {entry} – {sniper_val}%",
@@ -332,22 +316,99 @@ def check_pending_confirmations():
             pf2 = sn["final"]
             estado2 = "Confirmado" if pf2>=80 else "Cancelado"
             SHEET.update_cell(idx, HEADERS.index("Estado")+1, estado2)
+            log_debug({"event":"confirmation","ticker":ticker,"estado":estado2})
+
+# =========================
+# Recalibración
+# =========================
+def recalibrate_weights_from_sheet(n_recent=500, alpha=0.25):
+    """
+    Recalibra pesos de señales (base/pat/macd/sr) usando histórico.
+    Guarda último set en hoja 'meta'. Devuelve dict con pesos o None.
+    """
+    try:
+        rows = SHEET.get_all_records()
+        if not rows: 
+            log_debug({"event":"recalibrate","status":"no_rows"})
+            return None
+        df = pd.DataFrame(rows).tail(n_recent)
+        needed = ["ProbFinal","pat_score","macd_val","sr_score","Resultado"]
+        if not all(c in df.columns for c in needed):
+            log_debug({"event":"recalibrate","status":"missing_columns"})
+            return None
+        df = df.dropna(subset=["Resultado"])
+        df["y"] = df["Resultado"].apply(lambda x: 1 if str(x).strip().lower()=="win"=="win" else (1 if str(x).strip().lower()=="win" else 0))
+        if df["y"].sum()==0:
+            log_debug({"event":"recalibrate","status":"no_wins"})
+            return None
+
+        cors = {
+            "base": abs(df["ProbFinal"].corr(df["y"]) or 0),
+            "pat":  abs(df["pat_score"].corr(df["y"]) or 0),
+            "macd": abs(df["macd_val"].corr(df["y"]) or 0),
+            "sr":   abs(df["sr_score"].corr(df["y"]) or 0)
+        }
+        s = sum(cors.values())+1e-9
+        norm = {k: cors[k]/s for k in cors}
+        sm = {
+            "w_base": round(alpha*norm["base"]+(1-alpha)*0.5,3),
+            "w_pat":  round(alpha*norm["pat"] +(1-alpha)*0.2,3),
+            "w_macd": round(alpha*norm["macd"]+(1-alpha)*0.15,3),
+            "w_sr":   round(alpha*norm["sr"]  +(1-alpha)*0.15,3),
+            "ts": now_et().isoformat()
+        }
+        try:
+            ws = GC.open_by_key(SPREADSHEET_ID).worksheet("meta")
+        except gspread.WorksheetNotFound:
+            ws = GC.open_by_key(SPREADSHEET_ID).add_worksheet("meta", 100, 20)
+            ws.update("A1", [["w_base","w_pat","w_macd","w_sr","ts"]])
+        ws.append_row([sm["w_base"], sm["w_pat"], sm["w_macd"], sm["w_sr"], sm["ts"]])
+        log_debug({"event":"recalibrate","weights":sm})
+        return sm
+    except Exception as e:
+        log_debug({"event":"recalibrate_error","error":str(e)})
+        return None
+
+# =========================
+# Util: último precio como entrada
+# =========================
+def latest_price(ticker: str) -> float:
+    df = fetch_yf(ticker, "1m", "1d")
+    try:
+        return float(df["Close"].iloc[-1])
+    except Exception:
+        return 0.0
 
 # =========================
 # ▶️ Main
 # =========================
 def main():
     ensure_headers()
-    # señales de prueba
-    signals = [
-        ("DKNG","Buy",45.3),
-        ("MES","Buy",5200.0),
-        ("MNQ","Sell",18000.0)
-    ]
-    for t,s,e in signals:
-        process_signal(t,s,e)
+
+    # Señales de prueba para equity y micros (usa último precio como entrada)
+    try:
+        dkng_px = latest_price("DKNG")
+        if dkng_px > 0:
+            process_signal("DKNG", "Buy", round(dkng_px, 4))
+    except Exception as e:
+        log_debug({"event":"seed_signal_error","ticker":"DKNG","error":str(e)})
+
+    try:
+        mes_px = latest_price("MES")
+        if mes_px > 0:
+            process_signal("MES", "Sell", round(mes_px, 2))
+    except Exception as e:
+        log_debug({"event":"seed_signal_error","ticker":"MES","error":str(e)})
+
+    try:
+        mnq_px = latest_price("MNQ")
+        if mnq_px > 0:
+            process_signal("MNQ", "Buy", round(mnq_px, 2))
+    except Exception as e:
+        log_debug({"event":"seed_signal_error","ticker":"MNQ","error":str(e)})
+
+    # Confirmaciones pendientes
     check_pending_confirmations()
-    recalibrate_weights_from_sheet()
 
 if __name__=="__main__":
     main()
