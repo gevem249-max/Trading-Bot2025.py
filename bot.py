@@ -130,7 +130,7 @@ def prob_multi_frame(ticker: str, side: str, weights=None) -> dict:
     return {"per_frame":probs,"final":final}
 
 # =========================
-# Sniper extra (MACD, patrones, ATR, soportes)
+# Sniper extra
 # =========================
 def atr(df, period=14):
     if df is None or df.empty: return 0.0
@@ -302,6 +302,7 @@ def recalibrate_weights_from_sheet(n_recent=500, alpha=0.25):
     """
     Recalibra los pesos usando los últimos n registros del Google Sheet.
     Ajusta w_base, w_pat, w_macd, w_sr y guarda en la hoja 'meta'.
+    alpha = 0.25 controla cuánto se mezclan los nuevos pesos con los anteriores.
     """
     try:
         rows = SHEET.get_all_records()
@@ -317,7 +318,7 @@ def recalibrate_weights_from_sheet(n_recent=500, alpha=0.25):
         df = df.dropna(subset=["Resultado"])
         df["y"] = df["Resultado"].apply(lambda x: 1 if str(x).strip().lower()=="win" else 0)
         if df["y"].sum() == 0:
-            print("⚠️ No hay suficientes operaciones ganadoras")
+            print("⚠️ No hay suficientes operaciones ganadoras para recalibrar")
             return None
 
         cors = {
@@ -356,7 +357,6 @@ def recalibrate_weights_from_sheet(n_recent=500, alpha=0.25):
 def main():
     ensure_headers()
     process_signal("DKNG","Buy",45.3)
-    process_signal("MES","Buy",5200.0)
     check_pending_confirmations()
 
 if __name__=="__main__":
