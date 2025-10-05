@@ -8,6 +8,7 @@ on:
 jobs:
   recalibrate:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -27,8 +28,4 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
         run: |
-          python - <<'EOF'
-          from bot import recalibrate_weights_from_sheet
-          result = recalibrate_weights_from_sheet()
-          print("Recalibration result:", result)
-          EOF
+          python recalibrate.py
