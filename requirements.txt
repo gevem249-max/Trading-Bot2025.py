@@ -1,20 +1,14 @@
-# --- CORE ---
-pandas==2.2.2
-numpy==1.26.4
-yfinance==0.2.40
-pytz==2024.1
-matplotlib==3.9.2
+# Core
+pandas
+numpy
+yfinance
+pytz
+matplotlib
 
-# --- GOOGLE SHEETS ---
-gspread==6.1.2
-google-auth==2.35.0
+# Google Sheets
+gspread
+google-auth
 
-# --- STREAMLIT ---
-streamlit==1.37.1
-streamlit-autorefresh==1.0.1
-
-# --- FIX DEPENDENCY LOOP ---
-pygments==2.19.1
-rich==13.9.2
-markdown-it-py==3.0.0
-mdurl==0.1.2
+# Streamlit Panel
+streamlit
+streamlit-autorefresh
