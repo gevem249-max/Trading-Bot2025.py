@@ -1,4 +1,4 @@
-import os, json, time, imaplib, email, re, smtplib, pytz, datetime as dt
+import os, json, smtplib, pytz, datetime as dt, re
 from email.mime.text import MIMEText
 
 import pandas as pd
@@ -40,23 +40,6 @@ def classify_market(ticker: str) -> str:
     if FOREX_RE.match(t) and t not in CRYPTO_TICKERS: return "forex"
     return "equity"
 
-def is_market_open(market: str, t: dt.datetime) -> bool:
-    wd, h, m = t.weekday(), t.hour, t.minute
-    if market == "equity": return wd < 5 and (9*60+30) <= (h*60+m) < (16*60)
-    if market == "cme_micro":
-        if wd == 5: return False
-        if wd == 6 and h < 18: return False
-        if wd == 4 and h >= 17: return False
-        if h == 17: return False
-        return True
-    if market == "forex":
-        if wd == 5: return False
-        if wd == 6 and h < 17: return False
-        if wd == 4 and h >= 17: return False
-        return True
-    if market == "crypto": return True
-    return False
-
 # =========================
 # 📬 Email
 # =========================
@@ -79,9 +62,9 @@ def ema(series, span):
 def rsi(series, period=14):
     delta = series.diff().dropna()
 
-    # Convertimos en arrays 1D planos
-    up = np.where(delta > 0, delta, 0).flatten()
-    down = np.where(delta < 0, -delta, 0).flatten()
+    # Convierte en arrays 1D planos
+    up = np.where(delta > 0, delta, 0).ravel()
+    down = np.where(delta < 0, -delta, 0).ravel()
 
     roll_up = pd.Series(up, index=delta.index).rolling(period).mean()
     roll_down = pd.Series(down, index=delta.index).rolling(period).mean()
