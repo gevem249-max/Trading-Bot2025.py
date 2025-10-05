@@ -9,6 +9,6 @@ matplotlib==3.9.2
 gspread==6.1.2
 google-auth==2.35.0
 
-# Streamlit
+# Streamlit (fijo)
 streamlit==1.37.1
 streamlit-autorefresh==1.0.1
