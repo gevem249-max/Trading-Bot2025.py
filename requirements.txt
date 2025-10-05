@@ -2,18 +2,21 @@
 pandas
 numpy
 yfinance
+python-dateutil
 pytz
 matplotlib
 
-# Google Sheets
+# HTTP / utilitarios
+requests
+
+# Google Sheets + auth
 gspread
 google-auth
 
-# Gmail envío (SMTP ya es built-in en Python, no requiere extra)
-
-# Streamlit Panel
+# Streamlit (panel) + util y refresco automático
 streamlit
 streamlit-autorefresh
 
-# Seguridad adicional para parsing JSON (incluido en stdlib pero mejor fijar)
-python-dateutil
+# Opcionales útiles para análisis / debugging (recomendados)
+ipython
+tqdm
