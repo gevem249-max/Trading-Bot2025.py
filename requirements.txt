@@ -1,14 +1,25 @@
+# =========================
 # Core
-pandas
-numpy
-yfinance
-pytz
-matplotlib
+# =========================
+pandas==2.2.2
+numpy==1.26.4
+yfinance==0.2.44
+pytz==2024.1
+matplotlib==3.9.2
 
+# =========================
 # Google Sheets
-gspread
-google-auth
+# =========================
+gspread==6.1.2
+google-auth==2.34.0
 
+# =========================
 # Streamlit Panel (si usas la app de panel)
-streamlit
-streamlit-autorefresh
+# =========================
+streamlit==1.38.0
+streamlit-autorefresh==1.0.1
+
+# =========================
+# Email
+# =========================
+email-validator==2.2.0
