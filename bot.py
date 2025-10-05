@@ -1,4 +1,4 @@
-# bot.py — Trading-Bot completo con Sniper + confirmaciones + auto-resultado SL/TP
+# bot.py — Trading-Bot completo con Sniper + confirmaciones + auto-resultado SL/TP + alertas de mercados
 
 import os, json, re, pytz, datetime as dt, smtplib
 from email.mime.text import MIMEText
@@ -39,9 +39,10 @@ GMAIL_PASS = os.getenv("GMAIL_APP_PASS")
 ALERT_DKNG = os.getenv("ALERT_DKNG")
 ALERT_MICROS = os.getenv("ALERT_MICROS")
 ALERT_DEFAULT = os.getenv("ALERT_DEFAULT", GMAIL_USER)
+ALERT_MARKETS = os.getenv("ALERT_MARKETS", ALERT_DEFAULT)  # destinatarios para alertas de mercado
 
 # =========================
-# 🧭 Tiempo y mercado
+# 🧭 Tiempo, mercado y sesiones
 # =========================
 def now_et():
     return dt.datetime.now(TZ)
@@ -52,6 +53,58 @@ def classify_market(ticker: str) -> str:
     if t in CRYPTO_TICKERS: return "crypto"
     if FOREX_RE.match(t) and t not in CRYPTO_TICKERS: return "forex"
     return "equity"
+
+def is_market_open(market: str, t: dt.datetime) -> bool:
+    """
+    Estado de mercado en ET:
+      - equity: Lun–Vie 09:30–16:00
+      - cme_micro: Dom 18:00 – Vie 17:00, pausa diaria 17:00–18:00
+      - forex: Dom 17:00 – Vie 17:00 (simplificado)
+      - crypto: 24/7
+    """
+    wd = t.weekday()  # 0=Mon ... 6=Sun
+    h, m = t.hour, t.minute
+    minutes = h*60 + m
+
+    if market == "equity":
+        if wd >= 5:  # sab, dom
+            return False
+        return (9*60 + 30) <= minutes < (16*60)
+
+    if market == "cme_micro":
+        if wd == 5:  # sábado
+            return False
+        if wd == 6 and minutes < (18*60):  # domingo antes de 18:00
+            return False
+        if wd == 4 and minutes >= (17*60):  # viernes 17:00+
+            return False
+        if (17*60) <= minutes < (18*60):  # pausa diaria
+            return False
+        return True
+
+    if market == "forex":
+        if wd == 5:  # sábado
+            return False
+        if wd == 6 and minutes < (17*60):  # domingo <17:00
+            return False
+        if wd == 4 and minutes >= (17*60):  # viernes 17:00+
+            return False
+        return True
+
+    if market == "crypto":
+        return True
+
+    return False
+
+def is_london_session_open(t: dt.datetime) -> bool:
+    """
+    Sesión de Londres (FX) aproximada en ET: 03:00 – 12:00.
+    """
+    wd = t.weekday()  # 0=Mon ... 6=Sun
+    if wd >= 5:  # sábado y domingo fuera
+        return False
+    minutes = t.hour*60 + t.minute
+    return (3*60) <= minutes < (12*60)
 
 # =========================
 # 📬 Email
@@ -274,8 +327,11 @@ def process_signal(ticker: str, side: str, entry: float):
     append_signal(row)
 
     if estado=="Pre" and recipients:
-        send_mail_many(f"📊 Pre-señal {ticker} {side} {entry} – {sniper_val}%",
-            f"{ticker} {side} @ {entry}\nProb final:{pf}% Sniper:{sniper_val}%\nSL:{sl} TP:{tp}\nConfirm:{scheduled_confirm}",recipients)
+        send_mail_many(
+            f"📊 Pre-señal {ticker} {side} {entry} – {sniper_val}%",
+            f"{ticker} {side} @ {entry}\nProb final:{pf}% Sniper:{sniper_val}%\nSL:{sl} TP:{tp}\nConfirm:{scheduled_confirm}",
+            recipients
+        )
     return row
 
 # =========================
@@ -323,6 +379,85 @@ def check_trade_outcomes():
                 SHEET.update_cell(idx, HEADERS.index("Resultado")+1, "Win")
 
 # =========================
+# 📣 Estado de mercados (persistencia en hoja 'state')
+# =========================
+STATE_HEADERS = ["Market","State","LastChangeISO"]
+
+def _get_state_ws():
+    sh = GC.open_by_key(SPREADSHEET_ID)
+    try:
+        ws = sh.worksheet("state")
+    except gspread.WorksheetNotFound:
+        ws = sh.add_worksheet(title="state", rows=50, cols=5)
+        ws.update("A1", [STATE_HEADERS])
+        # inicializar mercados conocidos
+        init_rows = [
+            ["equity","Closed",""],
+            ["cme_micro","Closed",""],
+            ["forex","Closed",""],
+            ["crypto","Open",""],          # crypto 24/7
+            ["london_fx","Closed",""],     # sesión Londres
+        ]
+        ws.update(f"A2:C{len(init_rows)+1}", init_rows)
+    return ws
+
+def _read_states():
+    ws = _get_state_ws()
+    recs = ws.get_all_records()
+    state = {}
+    for r in recs:
+        state[r.get("Market")] = {
+            "State": r.get("State","Closed"),
+            "LastChangeISO": r.get("LastChangeISO","")
+        }
+    return ws, state
+
+def _write_state(ws, market, new_state, ts_iso):
+    vals = ws.get_all_values()
+    headers = vals[0] if vals else STATE_HEADERS
+    mcol = headers.index("Market")+1
+    scol = headers.index("State")+1
+    tcol = headers.index("LastChangeISO")+1
+    # buscar fila
+    for i in range(2, len(vals)+1):
+        if ws.cell(i, mcol).value == market:
+            ws.update_cell(i, scol, new_state)
+            ws.update_cell(i, tcol, ts_iso)
+            return
+    # si no existe, agregar
+    ws.append_row([market, new_state, ts_iso])
+
+def notify_market_status():
+    """
+    Envía email cuando cambia de Abierto<->Cerrado por mercado,
+    y para la sesión de Londres (london_fx).
+    """
+    t = now_et()
+    ws, state = _read_states()
+    events = []
+
+    checks = [
+        ("equity",        is_market_open("equity", t)),
+        ("cme_micro",     is_market_open("cme_micro", t)),
+        ("forex",         is_market_open("forex", t)),
+        ("crypto",        is_market_open("crypto", t)),
+        ("london_fx",     is_london_session_open(t)),
+    ]
+
+    for market, is_open in checks:
+        prev = state.get(market, {"State":"Closed"}).get("State","Closed")
+        curr = "Open" if is_open else "Closed"
+        if prev != curr:
+            ts = t.isoformat()
+            _write_state(ws, market, curr, ts)
+            subject = f"🔔 {market.upper()} ahora está {('ABIERTO' if curr=='Open' else 'CERRADO')}"
+            body = f"El mercado/sesión **{market.upper()}** cambió de {prev} a {curr}.\nHora ET: {t.strftime('%Y-%m-%d %H:%M:%S')}"
+            send_mail_many(subject, body, ALERT_MARKETS or ALERT_DEFAULT or GMAIL_USER)
+            events.append((market, prev, curr, ts))
+
+    return events
+
+# =========================
 # ▶️ Main
 # =========================
 def main():
@@ -331,6 +466,7 @@ def main():
     process_signal("DKNG","Buy",45.3)
     check_pending_confirmations()
     check_trade_outcomes()
+    notify_market_status()  # ← alertas de apertura/cierre (incluye Londres FX)
 
 if __name__=="__main__":
     main()
