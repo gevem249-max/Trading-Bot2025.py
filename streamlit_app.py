@@ -1,4 +1,3 @@
-# streamlit_app.py
 import os
 import json
 import pandas as pd
@@ -9,9 +8,7 @@ st.title("📊 Trading Bot Dashboard")
 
 st.success("✅ Streamlit cargó correctamente.")
 
-# --- Lectura opcional del Google Sheet (solo si hay secretos) ---
 def get_secret(name, default=None):
-    # Streamlit Cloud -> st.secrets / local -> env
     try:
         return st.secrets.get(name, default)
     except Exception:
@@ -39,6 +36,6 @@ if SPREADSHEET_ID and GS_JSON_RAW:
         else:
             st.dataframe(df, use_container_width=True, height=420)
     except Exception as e:
-        st.warning(f"No se pudo leer Google Sheets (opcional): {e}")
+        st.warning(f"No se pudo leer Google Sheets: {e}")
 else:
-    st.info("Configura SPREADSHEET_ID y GOOGLE_SHEETS_JSON en **Secrets** si quieres ver la tabla aquí.")
+    st.info("Configura SPREADSHEET_ID y GOOGLE_SHEETS_JSON en Secrets para ver la tabla.")
