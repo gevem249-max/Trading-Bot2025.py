@@ -9,6 +9,6 @@ matplotlib
 gspread
 google-auth
 
-# Streamlit Panel
+# Streamlit Panel (opcional si usas panel visual)
 streamlit
 streamlit-autorefresh
