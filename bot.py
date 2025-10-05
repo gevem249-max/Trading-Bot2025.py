@@ -28,7 +28,7 @@ GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_PASS = os.getenv("GMAIL_APP_PASS")
 
 # =========================
-# 🧭 Utilidades de tiempo/mercados
+# 🧭 Tiempo / Mercado
 # =========================
 def now_et():
     return dt.datetime.now(TZ)
@@ -58,17 +58,21 @@ def is_market_open(market: str, t: dt.datetime) -> bool:
     return False
 
 # =========================
-# 📬 Email
+# 📬 Email (múltiples destinatarios)
 # =========================
-def send_mail(subject: str, body: str, to_email: str=None):
-    to_email = to_email or GMAIL_USER
+def send_mail_many(subject: str, body: str, to_emails: str):
+    if not to_emails:
+        return
+    recipients = [e.strip() for e in to_emails.split(",") if e.strip()]
+    if not recipients:
+        return
     msg = MIMEText(body)
     msg["Subject"] = subject
     msg["From"] = GMAIL_USER
-    msg["To"] = to_email
+    msg["To"] = ", ".join(recipients)
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
         srv.login(GMAIL_USER, GMAIL_PASS)
-        srv.sendmail(GMAIL_USER, [to_email], msg.as_string())
+        srv.sendmail(GMAIL_USER, recipients, msg.as_string())
 
 # =========================
 # 📈 Probabilidad multi-timeframe
@@ -148,9 +152,9 @@ def update_row_status(ticker, fecha_iso, estado=None, resultado=None, nota=None)
             break
 
 # =========================
-# 🚦 Motor principal
+# 🚦 Motor principal (con routing de correos)
 # =========================
-def process_signal(ticker: str, side: str, entry: float, notify_email: str=None):
+def process_signal(ticker: str, side: str, entry: float):
     t, market = now_et(), classify_market(ticker)
     pm = prob_multi_frame(ticker, side)
     p1, p5, p15, p1h, pf = pm["per_frame"]["1m"], pm["per_frame"]["5m"], pm["per_frame"]["15m"], pm["per_frame"]["1h"], pm["final"]
@@ -171,19 +175,29 @@ def process_signal(ticker: str, side: str, entry: float, notify_email: str=None)
     }
     append_signal(base)
 
-    if notify_email:
-        send_mail(
-            f"Señal {ticker} {side} {entry} – {pf}%",
-            f"Ticker: {ticker}\nLado: {side}\nEntrada: {entry}\nProbFinal: {pf}%\nClasificación: {clasif}",
-            notify_email
-        )
+    # --- Destinatarios según ticker ---
+    if ticker.upper() == "DKNG":
+        recipients = os.getenv("ALERT_DKNG")                     # ej: "a@gmail.com,b@outlook.com"
+    elif ticker.upper() in MICRO_TICKERS:
+        recipients = os.getenv("ALERT_MICROS", GMAIL_USER)       # si no existe, cae al tuyo
+    else:
+        recipients = os.getenv("ALERT_DEFAULT", GMAIL_USER)      # por defecto, tu correo
+
+    subject = f"Señal {ticker} {side} {entry} – {pf}%"
+    body = (
+        f"Ticker: {ticker}\nLado: {side}\nEntrada: {entry}\n"
+        f"ProbFinal: {pf}%\nClasificación: {clasif}"
+    )
+    send_mail_many(subject, body, recipients)
 
 # =========================
 # ▶️ Entry
 # =========================
 def main():
     ensure_headers()
-    process_signal("DKNG","Buy",45.30, notify_email=GMAIL_USER)
+    # ⚠️ DEMO: esto envía una señal de prueba cada vez que corre el Action.
+    # Coméntalo cuando no quieras spam o reemplázalo por tus alertas reales:
+    process_signal("DKNG","Buy",45.30)
 
 if __name__=="__main__":
     main()
