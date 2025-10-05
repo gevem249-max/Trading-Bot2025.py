@@ -17,7 +17,7 @@ google-auth
 streamlit
 streamlit-autorefresh
 
-# Opcionales útiles para análisis / debugging (recomendados)
+# Opcionales útiles
 ipython
 tqdm
 mplfinance
