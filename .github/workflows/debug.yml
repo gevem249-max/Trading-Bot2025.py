@@ -1,4 +1,4 @@
-name: Debug Bot
+name: Debug
 
 on:
   workflow_dispatch:
@@ -6,7 +6,6 @@ on:
 jobs:
   debug:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -16,16 +15,38 @@ jobs:
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
+      - name: Install minimal deps
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          pip install gspread google-auth pandas
 
-      - name: Run bot with debug
+      - name: Print secrets presence (no valores)
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
         run: |
-          python bot.py || true
+          if [ -z "${SPREADSHEET_ID}" ]; then echo "SPREADSHEET_ID=⛔"; else echo "SPREADSHEET_ID=✅"; fi
+          if [ -z "${GOOGLE_SHEETS_JSON}" ]; then echo "GOOGLE_SHEETS_JSON=⛔"; else echo "GOOGLE_SHEETS_JSON=✅"; fi
+
+      - name: Try read first row from Google Sheet (non-fatal)
+        env:
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
+        run: |
+          python - <<'PY'
+          import os, json
+          import gspread
+          from google.oauth2.service_account import Credentials
+
+          sid = os.getenv("SPREADSHEET_ID")
+          js = os.getenv("GOOGLE_SHEETS_JSON")
+          if not sid or not js:
+              print("⛔ Falta secreto: no se intenta leer")
+              raise SystemExit(0)
+          creds = Credentials.from_service_account_info(json.loads(js), scopes=["https://www.googleapis.com/auth/spreadsheets"])
+          gc = gspread.authorize(creds)
+          ws = gc.open_by_key(sid).sheet1
+          vals = ws.get_all_values()
+          print("✅ Filas leídas:", len(vals))
+          print("👀 Primera fila:", vals[0] if vals else "vacío")
+          PY
