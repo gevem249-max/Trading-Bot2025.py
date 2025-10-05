@@ -62,6 +62,9 @@ def is_market_open(market: str, t: dt.datetime) -> bool:
 # =========================
 def send_mail(subject: str, body: str, to_email: str=None):
     to_email = to_email or GMAIL_USER
+    if not to_email: 
+        print("⚠️ No se envió correo: GMAIL_USER vacío")
+        return
     msg = MIMEText(body)
     msg["Subject"] = subject
     msg["From"] = GMAIL_USER
@@ -78,16 +81,21 @@ def ema(series, span):
 
 def rsi(series, period=14):
     delta = series.diff()
-    up, down = np.where(delta>0, delta, 0.0), np.where(delta<0, -delta, 0.0)
+    up = np.where(delta > 0, delta, 0.0).flatten()
+    down = np.where(delta < 0, -delta, 0.0).flatten()
+
     roll_up = pd.Series(up, index=series.index).rolling(period).mean()
     roll_down = pd.Series(down, index=series.index).rolling(period).mean()
     rs = roll_up / (roll_down + 1e-9)
-    return 100 - (100/(1+rs))
+    return 100 - (100 / (1 + rs))
 
 def frame_prob(df: pd.DataFrame, side: str) -> float:
     if df.empty: return 50.0
-    close, e8, e21 = df["Close"], ema(df["Close"], 8), ema(df["Close"], 21)
-    r, trend, score = rsi(close, 14).fillna(50).iloc[-1], (e8.iloc[-1]-e21.iloc[-1]), 50.0
+    close = df["Close"]
+    e8, e21 = ema(close, 8), ema(close, 21)
+    r = rsi(close, 14).fillna(50).iloc[-1]
+    trend, score = (e8.iloc[-1] - e21.iloc[-1]), 50.0
+
     if side.lower()=="buy":
         if trend > 0: score += 20
         if 45 <= r <= 70: score += 15
@@ -108,7 +116,14 @@ def fetch_yf(ticker: str, interval: str, lookback: str):
 
 def prob_multi_frame(ticker: str, side: str) -> dict:
     frames = {"1m":("1m","2d"),"5m":("5m","5d"),"15m":("15m","1mo"),"1h":("60m","3mo")}
-    probs = {k: frame_prob(fetch_yf(ticker,itv,lb), side) for k,(itv,lb) in frames.items()}
+    probs = {}
+    for k,(itv,lb) in frames.items():
+        df = fetch_yf(ticker,itv,lb)
+        if df.empty:
+            print(f"⚠️ No data for {ticker} {itv}")
+            probs[k] = 50.0
+        else:
+            probs[k] = frame_prob(df, side)
     final = round((probs["1m"]*0.2 + probs["5m"]*0.4 + probs["15m"]*0.25 + probs["1h"]*0.15),1)
     return {"per_frame":probs,"final":final}
 
@@ -131,18 +146,6 @@ def ensure_headers():
 def append_signal(row_dict: dict):
     ensure_headers()
     SHEET.append_row([row_dict.get(k,"") for k in HEADERS])
-
-def update_row_status(ticker, fecha_iso, estado=None, resultado=None, nota=None):
-    vals = SHEET.get_all_values()
-    if not vals: return
-    headers, rows = vals[0], vals[1:]
-    idx_map = {h:i for i,h in enumerate(headers)}
-    for i, r in enumerate(rows, start=2):
-        if r[idx_map["Ticker"]]==ticker and r[idx_map["FechaISO"]]==fecha_iso:
-            if estado: SHEET.update_cell(i, idx_map["Estado"]+1, estado)
-            if resultado: SHEET.update_cell(i, idx_map["Resultado"]+1, resultado)
-            if nota: SHEET.update_cell(i, idx_map["Nota"]+1, nota)
-            break
 
 # =========================
 # 🚦 Motor principal
@@ -168,7 +171,8 @@ def process_signal(ticker: str, side: str, entry: float, notify_email: str=None)
     }
     append_signal(base)
 
-    # Notificación opcional
+    print(f"✅ Señal registrada: {ticker} {side} @ {entry} → {pf}% ({clasif})")
+
     if notify_email:
         send_mail(
             f"Señal {ticker} {side} {entry} – {pf}%",
@@ -181,7 +185,6 @@ def process_signal(ticker: str, side: str, entry: float, notify_email: str=None)
 # =========================
 def main():
     ensure_headers()
-    # Ejemplo manual (descomenta o cambia por alertas reales)
     process_signal("DKNG","Buy",45.30, notify_email=GMAIL_USER)
 
 if __name__=="__main__":
