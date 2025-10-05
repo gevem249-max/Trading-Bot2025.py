@@ -69,7 +69,8 @@ def recalibrate():
     for tkr in df["Ticker"].unique():
         try:
             data = yf.download(tkr, period="5d", interval="5m", progress=False)
-            if data.empty: continue
+            if data.empty: 
+                continue
 
             close = data["Close"]
             e8, e21 = ema(close, 8), ema(close, 21)
