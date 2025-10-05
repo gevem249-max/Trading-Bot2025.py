@@ -1,4 +1,4 @@
-import os, json, smtplib, pytz, datetime as dt, re
+import os, json, smtplib, pytz, datetime as dt
 from email.mime.text import MIMEText
 
 import pandas as pd
@@ -40,10 +40,30 @@ def classify_market(ticker: str) -> str:
     if FOREX_RE.match(t) and t not in CRYPTO_TICKERS: return "forex"
     return "equity"
 
+def is_market_open(market: str, t: dt.datetime) -> bool:
+    wd, h, m = t.weekday(), t.hour, t.minute
+    if market == "equity": return wd < 5 and (9*60+30) <= (h*60+m) < (16*60)
+    if market == "cme_micro":
+        if wd == 5: return False
+        if wd == 6 and h < 18: return False
+        if wd == 4 and h >= 17: return False
+        if h == 17: return False
+        return True
+    if market == "forex":
+        if wd == 5: return False
+        if wd == 6 and h < 17: return False
+        if wd == 4 and h >= 17: return False
+        return True
+    if market == "crypto": return True
+    return False
+
 # =========================
 # 📬 Email
 # =========================
 def send_mail(subject: str, body: str, to_email: str=None):
+    if not GMAIL_USER or not GMAIL_PASS:
+        print("⚠️ No hay credenciales de Gmail configuradas")
+        return
     to_email = to_email or GMAIL_USER
     msg = MIMEText(body)
     msg["Subject"] = subject
@@ -60,23 +80,31 @@ def ema(series, span):
     return series.ewm(span=span, adjust=False).mean()
 
 def rsi(series, period=14):
-    delta = series.diff().dropna()
-
-    # Convierte en arrays 1D planos
-    up = np.where(delta > 0, delta, 0).ravel()
-    down = np.where(delta < 0, -delta, 0).ravel()
-
-    roll_up = pd.Series(up, index=delta.index).rolling(period).mean()
-    roll_down = pd.Series(down, index=delta.index).rolling(period).mean()
+    delta = series.diff()
+    up, down = np.where(delta>0, delta, 0.0), np.where(delta<0, -delta, 0.0)
+    roll_up = pd.Series(up.flatten(), index=series.index).rolling(period).mean()
+    roll_down = pd.Series(down.flatten(), index=series.index).rolling(period).mean()
     rs = roll_up / (roll_down + 1e-9)
-
-    return 100 - (100 / (1 + rs))
+    return 100 - (100/(1+rs))
 
 def frame_prob(df: pd.DataFrame, side: str) -> float:
-    if df.empty: return 50.0
-    close, e8, e21 = df["Close"], ema(df["Close"], 8), ema(df["Close"], 21)
-    r, trend, score = rsi(close, 14).fillna(50).iloc[-1], (e8.iloc[-1]-e21.iloc[-1]), 50.0
-    if side.lower()=="buy":
+    if df.empty: 
+        return 50.0
+
+    # ✅ Aseguramos que Close sea 1D
+    close = df["Close"]
+    if isinstance(close, pd.DataFrame):
+        close = close.iloc[:, 0]
+
+    e8 = ema(close, 8)
+    e21 = ema(close, 21)
+
+    # ✅ Tomamos escalares
+    r = rsi(close, 14).fillna(50).iloc[-1]
+    trend = (e8 - e21).iloc[-1]
+    score = 50.0
+
+    if side.lower() == "buy":
         if trend > 0: score += 20
         if 45 <= r <= 70: score += 15
         if r < 35: score -= 15
@@ -84,6 +112,7 @@ def frame_prob(df: pd.DataFrame, side: str) -> float:
         if trend < 0: score += 20
         if 30 <= r <= 55: score += 15
         if r > 65: score -= 15
+
     return max(0.0, min(100.0, score))
 
 def fetch_yf(ticker: str, interval: str, lookback: str):
@@ -156,7 +185,6 @@ def process_signal(ticker: str, side: str, entry: float, notify_email: str=None)
 # =========================
 def main():
     ensure_headers()
-    # Ejemplo manual
     process_signal("DKNG","Buy",45.30, notify_email=GMAIL_USER)
 
 if __name__=="__main__":
