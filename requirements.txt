@@ -1,25 +1,18 @@
-# =========================
 # Core
-# =========================
-pandas==2.2.2
-numpy==1.26.4
-yfinance==0.2.44
-pytz==2024.1
-matplotlib==3.9.2
+pandas
+numpy
+yfinance
+pytz
+matplotlib
 
-# =========================
 # Google Sheets
-# =========================
-gspread==6.1.2
-google-auth==2.34.0
+gspread
+google-auth
 
-# =========================
-# Streamlit Panel (si usas la app de panel)
-# =========================
-streamlit==1.38.0
-streamlit-autorefresh==1.0.1
+# Gmail / Notificaciones (si las usas en bot.py)
+smtplib
+email-validator
 
-# =========================
-# Email
-# =========================
-email-validator==2.2.0
+# Streamlit Panel
+streamlit
+streamlit-autorefresh
