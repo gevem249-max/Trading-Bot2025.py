@@ -2,193 +2,273 @@ import streamlit as st
 import pandas as pd
 import gspread
 from google.oauth2.service_account import Credentials
-import os, json
+import json, os
 import matplotlib.pyplot as plt
 from streamlit_autorefresh import st_autorefresh
+import datetime as dt
+import pytz
 
-# ====================
-# 🔄 Auto Refresh cada 60s
-# ====================
+# =============================
+# 🔄 Auto-refresh cada 60 segundos
+# =============================
 st_autorefresh(interval=60 * 1000, key="refresh")
 
-# ====================
-# 🔑 Conexión Google Sheets
-# ====================
-SPREADSHEET_ID = st.secrets["SPREADSHEET_ID"]
-google_json = st.secrets["GOOGLE_SHEETS_JSON"]
+# =============================
+# 🔧 Config
+# =============================
+TZ = pytz.timezone("America/New_York")  # ET/NJ
+def now_et():
+    return dt.datetime.now(TZ)
 
-creds_info = json.loads(google_json)
-creds = Credentials.from_service_account_info(
-    creds_info, scopes=["https://www.googleapis.com/auth/spreadsheets"]
-)
-client = gspread.authorize(creds)
-sheet = client.open_by_key(SPREADSHEET_ID).sheet1
+def is_market_open(market: str, t: dt.datetime) -> bool:
+    wd = t.weekday()
+    h, m = t.hour, t.minute
+    if market == "equity":
+        if wd >= 5: return False
+        return (h*60+m) >= (9*60+30) and (h*60+m) < (16*60)
+    if market == "cme_micro":
+        if wd == 5: return False
+        if wd == 6 and h < 18: return False
+        if wd == 4 and h >= 17: return False
+        if h == 17: return False
+        return True
+    if market == "forex":
+        if wd == 5: return False
+        if wd == 6 and h < 17: return False
+        if wd == 4 and h >= 17: return False
+        return True
+    if market == "crypto":
+        return True
+    return False
 
-# ====================
-# 📑 Leer datos
-# ====================
+# =============================
+# 🔑 Conexión con Google Sheets
+# =============================
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
+GS_JSON = json.loads(os.getenv("GOOGLE_SHEETS_JSON"))
+CREDS = Credentials.from_service_account_info(GS_JSON, scopes=["https://www.googleapis.com/auth/spreadsheets"])
+GC = gspread.authorize(CREDS)
+SHEET = GC.open_by_key(SPREADSHEET_ID).sheet1
+
+# =============================
+# 📥 Cargar datos
+# =============================
 def load_data():
-    values = sheet.get_all_values()
+    values = SHEET.get_all_records()
     if not values:
         return pd.DataFrame()
-    df = pd.DataFrame(values[1:], columns=values[0])  # primera fila = headers
-    return df
-
-# ====================
-# 🎨 Interfaz
-# ====================
-st.set_page_config(page_title="Panel de Señales", layout="wide")
-st.title("📊 Panel de Señales - Trading Bot 2025")
+    return pd.DataFrame(values)
 
 df = load_data()
 
+# =============================
+# 🔔 Alerta sonora si hay nueva confirmada
+# =============================
+if "last_count" not in st.session_state:
+    st.session_state["last_count"] = 0
+
+current_count = len(df[df["Estado"]=="Confirmada"]) if not df.empty else 0
+
+if current_count > st.session_state["last_count"]:
+    st.markdown(
+        """
+        <audio autoplay>
+            <source src="https://actions.google.com/sounds/v1/alarms/beep_short.ogg" type="audio/ogg">
+        </audio>
+        """,
+        unsafe_allow_html=True
+    )
+
+st.session_state["last_count"] = current_count
+
+# =============================
+# 🟢 Encabezado de estado
+# =============================
+st.title("📊 Panel de Señales - Trading Bot 2025")
+
+col1, col2 = st.columns(2)
+
+with col1:
+    st.success("🤖 Bot Activo – corriendo en tiempo real")
+    st.markdown(f"🕒 **Hora local (NJ/ET):** {now_et().strftime('%Y-%m-%d %H:%M:%S')}")
+
+with col2:
+    t = now_et()
+    estados = []
+    for mkt in ["equity","cme_micro","forex","crypto"]:
+        if is_market_open(mkt, t):
+            estados.append(f"🟢 {mkt.upper()} abierto")
+        else:
+            estados.append(f"🔴 {mkt.upper()} cerrado")
+    st.markdown("**Mercados ahora:**<br>" + "<br>".join(estados), unsafe_allow_html=True)
+
+# =============================
+# 📌 Expander por TICKER
+# =============================
+if not df.empty and "Ticker" in df.columns:
+    with st.expander("📌 Activos en seguimiento (por ticker)"):
+        st.markdown("Resumen de señales por activo:")
+
+        activos = df["Ticker"].unique().tolist()
+        for i in range(0, len(activos), 3):
+            cols = st.columns(3)
+            for j, ticker in enumerate(activos[i:i+3]):
+                with cols[j]:
+                    subdf = df[df["Ticker"] == ticker]
+                    total = len(subdf)
+                    wins = (subdf["Resultado"] == "Win").sum()
+                    losses = (subdf["Resultado"] == "Loss").sum()
+                    descartadas = (subdf["Estado"] == "Descartada").sum()
+
+                    st.markdown(f"### 📍 {ticker}")
+                    st.caption(f"Total: {total} | ✅ {wins} | ❌ {losses} | 🚫 {descartadas}")
+
+                    # Mini gráfico
+                    fig, ax = plt.subplots(figsize=(2.8,2.5))
+                    valores = [wins, losses, descartadas]
+                    labels = ["✅","❌","🚫"]
+                    colores = ["green","red","blue"]
+
+                    bars = ax.bar(labels, valores, color=colores)
+                    for bar, val in zip(bars, valores):
+                        if total > 0:
+                            pct = (val/total)*100
+                            ax.text(
+                                bar.get_x() + bar.get_width()/2,
+                                bar.get_height() + 0.05,
+                                f"{pct:.0f}%",
+                                ha="center", va="bottom", fontsize=8, fontweight="bold"
+                            )
+                    ax.set_ylim(0, max(1, max(valores)))  
+                    st.pyplot(fig)
+
+# =============================
+# 📊 Panel principal con Tabs
+# =============================
 if df.empty:
     st.warning("⚠️ No hay señales registradas aún en la hoja.")
 else:
-    # --------------------
-    # 🎯 Filtros
-    # --------------------
-    activos = ["Todos"] + sorted(df["Ticker"].unique().tolist()) if "Ticker" in df.columns else ["Todos"]
-    activo_sel = st.selectbox("Filtrar por activo", activos)
+    tabs = st.tabs([
+        "✅ Señales Enviadas", 
+        "❌ Descartadas", 
+        "📈 Resultados Hoy", 
+        "📊 Histórico", 
+        "📉 Distribución Probabilidades", 
+        "🕒 Últimas Señales"
+    ])
 
-    dff = df.copy()
-    if activo_sel != "Todos":
-        dff = dff[dff["Ticker"] == activo_sel]
+    # --- Tab 1: Señales Enviadas
+    with tabs[0]:
+        enviadas = df[df["ProbFinal"] >= 80]
+        if enviadas.empty:
+            st.info("No hay señales enviadas aún.")
+        else:
+            st.dataframe(enviadas)
 
-    # --------------------
-    # 📑 Tabla
-    # --------------------
-    st.subheader("📑 Señales registradas")
-    st.dataframe(dff, use_container_width=True)
+    # --- Tab 2: Señales Descartadas
+    with tabs[1]:
+        descartadas = df[df["ProbFinal"] < 80]
+        if descartadas.empty:
+            st.info("No hay señales descartadas aún.")
+        else:
+            st.dataframe(descartadas)
 
-    # --------------------
-    # 📊 Resumen general
-    # --------------------
-    st.subheader("📈 Resumen general")
-    total = len(dff)
-    confirmadas = len(dff[dff["Estado"]=="Confirmada"])
-    descartadas = len(dff[dff["Estado"]=="Descartada"])
-    wins = len(dff[dff["Resultado"]=="Win"])
-    losses = len(dff[dff["Resultado"]=="Loss"])
+    # --- Tab 3: Resultados HOY
+    with tabs[2]:
+        hoy = dt.date.today().isoformat()
+        df_hoy = df[df["FechaISO"] == hoy] if "FechaISO" in df.columns else df.copy()
+        if df_hoy.empty:
+            st.info("Todavía no hay señales registradas hoy.")
+        else:
+            resultados = df_hoy["Resultado"].value_counts()
+            st.bar_chart(resultados)
 
-    st.markdown(f"""
-    - 📩 **Total señales**: {total}  
-    - ✅ **Confirmadas (≥80%)**: {confirmadas}  
-    - ❌ **Descartadas (<80%)**: {descartadas}  
-    - 🟢 **Ganadas**: {wins}  
-    - 🔴 **Perdidas**: {losses}  
-    """)
+            total = len(df_hoy[df_hoy["Estado"] == "Confirmada"])
+            wins = (df_hoy["Resultado"] == "Win").sum()
+            losses = (df_hoy["Resultado"] == "Loss").sum()
+            descartadas = (df_hoy["Estado"] == "Descartada").sum()
 
-    # --------------------
-    # 📊 Gráficos globales
-    # --------------------
-    col1, col2 = st.columns(2)
+            st.markdown(f"""
+            ### 📋 Resumen HOY
+            - Confirmadas: {total}  
+            - ✅ Wins: {wins}  
+            - ❌ Losses: {losses}  
+            - 🚫 Descartadas: {descartadas}  
+            """)
 
-    with col1:
-        if "Resultado" in dff.columns:
-            resultados = dff["Resultado"].value_counts()
-            if not resultados.empty:
-                fig, ax = plt.subplots()
-                resultados.plot(kind="bar", ax=ax, color=["green","red","gray"])
-                ax.set_title(f"Resultados ({activo_sel})")
-                ax.set_ylabel("Cantidad")
-                st.pyplot(fig)
+    # --- Tab 4: Histórico
+    with tabs[3]:
+        if "Resultado" in df.columns and "FechaISO" in df.columns:
+            # Totales
+            total_h = len(df[df["Estado"] == "Confirmada"])
+            wins_h = (df["Resultado"] == "Win").sum()
+            losses_h = (df["Resultado"] == "Loss").sum()
+            descartadas_h = (df["Estado"] == "Descartada").sum()
 
-    with col2:
-        if "ProbFinal" in dff.columns:
-            try:
-                dff["ProbFinal"] = pd.to_numeric(dff["ProbFinal"], errors="coerce")
-                if not dff["ProbFinal"].dropna().empty:
-                    fig2, ax2 = plt.subplots()
-                    dff["ProbFinal"].hist(ax=ax2, bins=10, color="skyblue", edgecolor="black")
-                    ax2.set_title(f"Distribución Probabilidades ({activo_sel})")
-                    ax2.set_xlabel("Probabilidad (%)")
-                    ax2.set_ylabel("Cantidad")
-                    st.pyplot(fig2)
-            except Exception as e:
-                st.error(f"Error gráfico probabilidades: {e}")
+            st.markdown(f"""
+            ### 📋 Resumen Histórico
+            - Confirmadas: {total_h}  
+            - ✅ Wins: {wins_h}  
+            - ❌ Losses: {losses_h}  
+            - 🚫 Descartadas: {descartadas_h}  
+            """)
 
-    # --------------------
-    # 📊 Resumenes por periodo (tabs)
-    # --------------------
-    if "FechaISO" in dff.columns:
-        st.subheader("📆 Resúmenes por periodo")
-
-        tab1, tab2, tab3 = st.tabs(["📅 Diario", "📈 Semanal", "📊 Mensual"])
-
-        # ----- Diario -----
-        with tab1:
-            df_daily = dff.groupby("FechaISO").agg(
-                total=("Ticker","count"),
-                confirmadas=("Estado", lambda x: (x=="Confirmada").sum()),
-                descartadas=("Estado", lambda x: (x=="Descartada").sum()),
+            # Evolución acumulada
+            df["FechaISO"] = pd.to_datetime(df["FechaISO"], errors="coerce")
+            df_daily = df.groupby("FechaISO").agg(
                 wins=("Resultado", lambda x: (x=="Win").sum()),
-                losses=("Resultado", lambda x: (x=="Loss").sum()),
-            ).reset_index()
+                losses=("Resultado", lambda x: (x=="Loss").sum())
+            ).cumsum().reset_index()
+            df_daily["winrate"] = df_daily.apply(lambda r: (r["wins"]/max(1, r["wins"]+r["losses"]))*100, axis=1)
 
-            df_daily["winrate"] = df_daily.apply(
-                lambda r: round((r["wins"]/max(1,r["wins"]+r["losses"]))*100,1), axis=1
-            )
+            st.subheader("📈 Evolución acumulada")
+            fig, ax = plt.subplots()
+            ax.plot(df_daily["FechaISO"], df_daily["wins"], marker="o", label="Wins", color="green")
+            ax.plot(df_daily["FechaISO"], df_daily["losses"], marker="o", label="Losses", color="red")
+            ax2 = ax.twinx()
+            ax2.plot(df_daily["FechaISO"], df_daily["winrate"], marker="x", linestyle="--", label="Winrate %", color="blue")
+            ax.legend(loc="upper left"); ax2.legend(loc="upper right")
+            st.pyplot(fig)
 
-            st.dataframe(df_daily, use_container_width=True)
+            # 📌 Expander por mercado
+            with st.expander("📊 Resumen por MERCADO"):
+                mercados = df["Mercado"].unique().tolist() if "Mercado" in df.columns else []
+                for i in range(0, len(mercados), 2):
+                    cols = st.columns(2)
+                    for j, mkt in enumerate(mercados[i:i+2]):
+                        with cols[j]:
+                            subdf = df[df["Mercado"] == mkt]
+                            total = len(subdf)
+                            wins = (subdf["Resultado"] == "Win").sum()
+                            losses = (subdf["Resultado"] == "Loss").sum()
+                            descartadas = (subdf["Estado"] == "Descartada").sum()
 
-            fig3, ax3 = plt.subplots()
-            ax3.plot(df_daily["FechaISO"], df_daily["winrate"], marker="o")
-            ax3.set_title("Winrate diario (%)")
-            ax3.set_xlabel("Fecha")
-            ax3.set_ylabel("Winrate (%)")
-            plt.xticks(rotation=45)
-            st.pyplot(fig3)
+                            st.markdown(f"### 🌐 {mkt.upper()}")
+                            st.caption(f"Total: {total} | ✅ {wins} | ❌ {losses} | 🚫 {descartadas}")
 
-        # ----- Semanal -----
-        with tab2:
-            dff["FechaISO"] = pd.to_datetime(dff["FechaISO"], errors="coerce")
-            df_weekly = dff.groupby(dff["FechaISO"].dt.to_period("W")).agg(
-                total=("Ticker","count"),
-                confirmadas=("Estado", lambda x: (x=="Confirmada").sum()),
-                descartadas=("Estado", lambda x: (x=="Descartada").sum()),
-                wins=("Resultado", lambda x: (x=="Win").sum()),
-                losses=("Resultado", lambda x: (x=="Loss").sum()),
-            ).reset_index()
+                            fig, ax = plt.subplots(figsize=(3,2.5))
+                            valores = [wins, losses, descartadas]
+                            labels = ["✅","❌","🚫"]
+                            colores = ["green","red","blue"]
 
-            df_weekly["winrate"] = df_weekly.apply(
-                lambda r: round((r["wins"]/max(1,r["wins"]+r["losses"]))*100,1), axis=1
-            )
-            df_weekly["Semana"] = df_weekly["FechaISO"].astype(str)
+                            bars = ax.bar(labels, valores, color=colores)
+                            for bar, val in zip(bars, valores):
+                                if total > 0:
+                                    pct = (val/total)*100
+                                    ax.text(bar.get_x()+bar.get_width()/2, bar.get_height()+0.05,
+                                            f"{pct:.0f}%", ha="center", va="bottom", fontsize=8, fontweight="bold")
+                            ax.set_ylim(0, max(1, max(valores)))
+                            st.pyplot(fig)
 
-            st.dataframe(df_weekly[["Semana","total","confirmadas","descartadas","wins","losses","winrate"]],
-                         use_container_width=True)
+    # --- Tab 5: Distribución Probabilidades
+    with tabs[4]:
+        if "ProbFinal" in df.columns:
+            fig, ax = plt.subplots()
+            df["ProbFinal"].hist(bins=10, ax=ax, color="skyblue", edgecolor="black")
+            ax.set_xlabel("Probabilidad Final (%)")
+            ax.set_ylabel("Número de Señales")
+            st.pyplot(fig)
 
-            fig4, ax4 = plt.subplots()
-            ax4.plot(df_weekly["Semana"], df_weekly["winrate"], marker="o")
-            ax4.set_title("Winrate semanal (%)")
-            ax4.set_xlabel("Semana")
-            ax4.set_ylabel("Winrate (%)")
-            plt.xticks(rotation=45)
-            st.pyplot(fig4)
-
-        # ----- Mensual -----
-        with tab3:
-            df_monthly = dff.groupby(dff["FechaISO"].dt.to_period("M")).agg(
-                total=("Ticker","count"),
-                confirmadas=("Estado", lambda x: (x=="Confirmada").sum()),
-                descartadas=("Estado", lambda x: (x=="Descartada").sum()),
-                wins=("Resultado", lambda x: (x=="Win").sum()),
-                losses=("Resultado", lambda x: (x=="Loss").sum()),
-            ).reset_index()
-
-            df_monthly["winrate"] = df_monthly.apply(
-                lambda r: round((r["wins"]/max(1,r["wins"]+r["losses"]))*100,1), axis=1
-            )
-            df_monthly["Mes"] = df_monthly["FechaISO"].astype(str)
-
-            st.dataframe(df_monthly[["Mes","total","confirmadas","descartadas","wins","losses","winrate"]],
-                         use_container_width=True)
-
-            fig5, ax5 = plt.subplots()
-            ax5.plot(df_monthly["Mes"], df_monthly["winrate"], marker="o")
-            ax5.set_title("Winrate mensual (%)")
-            ax5.set_xlabel("Mes")
-            ax5.set_ylabel("Winrate (%)")
-            plt.xticks(rotation=45)
-            st.pyplot(fig5)
+    # --- Tab 6: Últimas Señales
+    with tabs[5]:
+        st.dataframe(df.tail(10))
