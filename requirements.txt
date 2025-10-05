@@ -1,8 +1,7 @@
 streamlit
 gspread
-google-auth
-yfinance
 pandas
-pandas_ta
 matplotlib
-requests
+yfinance
+numpy
+streamlit-autorefresh
