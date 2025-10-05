@@ -1,3 +1,4 @@
+# streamlit_app.py
 import os, json, pytz, datetime as dt
 import pandas as pd
 import gspread
@@ -12,17 +13,63 @@ TZ = pytz.timezone("America/New_York")
 
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 GS_JSON = json.loads(os.getenv("GOOGLE_SHEETS_JSON"))
-CREDS = Credentials.from_service_account_info(GS_JSON, scopes=["https://www.googleapis.com/auth/spreadsheets"])
+CREDS = Credentials.from_service_account_info(
+    GS_JSON, scopes=["https://www.googleapis.com/auth/spreadsheets"]
+)
 GC = gspread.authorize(CREDS)
 SHEET = GC.open_by_key(SPREADSHEET_ID).sheet1
 
 # =========================
 # 🧭 Funciones auxiliares
 # =========================
-def now_et():
+def now_et() -> dt.datetime:
     return dt.datetime.now(TZ)
 
-def load_data():
+def is_market_open(market: str, t: dt.datetime) -> bool:
+    """
+    Devuelve True si 'market' está abierto en la hora ET de 't'.
+    Reglas simples y robustas:
+      - equity (NYSE/Nasdaq): Lun-Vie, 09:30–16:00
+      - cme_micro (futuros CME micros): Dom 18:00 – Vie 17:00, pausa diaria 17:00–18:00
+      - forex: Dom 17:00 – Vie 17:00 (pausas de liquidez ignoradas)
+      - crypto: 24/7
+    """
+    wd = t.weekday()           # 0 = Lunes ... 6 = Domingo
+    h, m = t.hour, t.minute
+    minutes = h * 60 + m
+
+    if market == "equity":
+        if wd >= 5:  # Sab-Dom
+            return False
+        return (9*60 + 30) <= minutes < (16*60)
+
+    if market == "cme_micro":
+        # Cierra viernes 17:00 y reabre domingo 18:00. Pausa diaria 17:00–18:00.
+        if wd == 5:  # Sábado
+            return False
+        if wd == 6 and minutes < (18*60):  # Domingo antes de 18:00
+            return False
+        if wd == 4 and minutes >= (17*60):  # Viernes 17:00+
+            return False
+        if (17*60) <= minutes < (18*60):    # Pausa diaria
+            return False
+        return True
+
+    if market == "forex":
+        if wd == 5:               # Sábado
+            return False
+        if wd == 6 and minutes < (17*60):  # Domingo < 17:00
+            return False
+        if wd == 4 and minutes >= (17*60): # Viernes 17:00+
+            return False
+        return True
+
+    if market == "crypto":
+        return True
+
+    return False
+
+def load_data() -> pd.DataFrame:
     values = SHEET.get_all_records()
     if not values:
         return pd.DataFrame(columns=[
@@ -36,7 +83,6 @@ def load_data():
 # 🎨 Dashboard
 # =========================
 st.set_page_config(page_title="Panel de Señales", layout="wide")
-
 st.title("📊 Panel de Señales - Trading Bot 2025")
 
 # Estado del bot
@@ -45,6 +91,24 @@ st.success("😊 Bot Activo – corriendo en tiempo real")
 # Hora local
 hora_actual = now_et()
 st.write(f"🕒 **Hora local (NJ/ET):** {hora_actual.strftime('%Y-%m-%d %H:%M:%S')}")
+
+# ===== NUEVO: Estado de mercados en tiempo real =====
+st.subheader("📡 Mercados en tiempo real (ET)")
+
+labels = {
+    "equity": "Equities (NYSE/Nasdaq)",
+    "cme_micro": "Futuros CME Micros",
+    "forex": "Forex (FX)",
+    "crypto": "Crypto (24/7)",
+}
+cols = st.columns(4)
+for i, mkt in enumerate(["equity","cme_micro","forex","crypto"]):
+    opened = is_market_open(mkt, hora_actual)
+    icon = "🟢" if opened else "🔴"
+    status = "Abierto" if opened else "Cerrado"
+    with cols[i]:
+        st.markdown(f"**{labels[mkt]}**")
+        st.markdown(f"{icon} **{status}**")
 
 # Cargar datos
 df = load_data()
@@ -83,13 +147,13 @@ with tabs[1]:
 with tabs[2]:
     st.subheader("📈 Resultados de Hoy")
     today = hora_actual.strftime("%Y-%m-%d")
-    today_df = df[df["FechaISO"]==today]
+    today_df = df[df["FechaISO"] == today]
     if today_df.empty:
         st.warning("⚠️ No hay resultados hoy.")
     else:
         st.dataframe(today_df)
 
-        # Gráfico de Win/Loss
+        # Gráfico de Win/Loss (hoy)
         winloss_data = today_df.groupby(["Resultado"]).size()
         fig, ax = plt.subplots()
         winloss_data.plot(kind="bar", color=["green","red","gray"], ax=ax)
@@ -140,15 +204,13 @@ else:
     # Conteo de resultados
     result_counts = df["Resultado"].value_counts()
 
-    # Winrate
-    if "Win" in result_counts and result_counts.sum() > 0:
-        winrate = round((result_counts.get("Win", 0) / result_counts.sum()) * 100, 2)
-    else:
-        winrate = 0
+    # Winrate global
+    total_ops = result_counts.sum()
+    winrate = round((result_counts.get("Win", 0) / total_ops) * 100, 2) if total_ops else 0.0
 
     col1, col2, col3 = st.columns(3)
     col1.metric("Total de señales", len(df))
-    col2.metric("Ganadas", result_counts.get("Win", 0))
+    col2.metric("Ganadas", int(result_counts.get("Win", 0)))
     col3.metric("Winrate (%)", f"{winrate}%")
 
     # Gráfico 1: Señales por Ticker
@@ -162,7 +224,10 @@ else:
     # Gráfico 2: Resultados (Win/Loss)
     st.subheader("🏆 Distribución de Resultados")
     fig2, ax2 = plt.subplots()
-    result_counts.plot(kind="bar", color=["green", "red", "gray"], ax=ax2)
+    # Orden amigable si existen
+    ordered = [c for c in ["Win","Loss","-"] if c in result_counts.index] + \
+              [c for c in result_counts.index if c not in ["Win","Loss","-"]]
+    result_counts.loc[ordered].plot(kind="bar", color=["green","red","gray"], ax=ax2)
     ax2.set_title("Resultados Win/Loss")
     ax2.set_ylabel("Cantidad")
     st.pyplot(fig2)
