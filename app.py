@@ -26,15 +26,7 @@ def now_et() -> dt.datetime:
     return dt.datetime.now(TZ)
 
 def is_market_open(market: str, t: dt.datetime) -> bool:
-    """
-    Devuelve True si 'market' está abierto en la hora ET de 't'.
-    Reglas simples y robustas:
-      - equity (NYSE/Nasdaq): Lun-Vie, 09:30–16:00
-      - cme_micro (futuros CME micros): Dom 18:00 – Vie 17:00, pausa diaria 17:00–18:00
-      - forex: Dom 17:00 – Vie 17:00 (pausas de liquidez ignoradas)
-      - crypto: 24/7
-    """
-    wd = t.weekday()           # 0 = Lunes ... 6 = Domingo
+    wd = t.weekday()
     h, m = t.hour, t.minute
     minutes = h * 60 + m
 
@@ -44,23 +36,22 @@ def is_market_open(market: str, t: dt.datetime) -> bool:
         return (9*60 + 30) <= minutes < (16*60)
 
     if market == "cme_micro":
-        # Cierra viernes 17:00 y reabre domingo 18:00. Pausa diaria 17:00–18:00.
-        if wd == 5:  # Sábado
+        if wd == 5:
             return False
-        if wd == 6 and minutes < (18*60):  # Domingo antes de 18:00
+        if wd == 6 and minutes < (18*60):
             return False
-        if wd == 4 and minutes >= (17*60):  # Viernes 17:00+
+        if wd == 4 and minutes >= (17*60):
             return False
-        if (17*60) <= minutes < (18*60):    # Pausa diaria
+        if (17*60) <= minutes < (18*60):
             return False
         return True
 
     if market == "forex":
-        if wd == 5:               # Sábado
+        if wd == 5:
             return False
-        if wd == 6 and minutes < (17*60):  # Domingo < 17:00
+        if wd == 6 and minutes < (17*60):
             return False
-        if wd == 4 and minutes >= (17*60): # Viernes 17:00+
+        if wd == 4 and minutes >= (17*60):
             return False
         return True
 
@@ -88,27 +79,29 @@ st.title("📊 Panel de Señales - Trading Bot 2025")
 # Estado del bot
 st.success("😊 Bot Activo – corriendo en tiempo real")
 
-# Hora local
+# Hora actual y mercados en la misma fila
 hora_actual = now_et()
-st.write(f"🕒 **Hora local (NJ/ET):** {hora_actual.strftime('%Y-%m-%d %H:%M:%S')}")
+col_time, col_markets = st.columns([1,3])
 
-# ===== NUEVO: Estado de mercados en tiempo real =====
-st.subheader("📡 Mercados en tiempo real (ET)")
+with col_time:
+    st.write(f"🕒 **Hora local (NJ/ET):** {hora_actual.strftime('%Y-%m-%d %H:%M:%S')}")
 
-labels = {
-    "equity": "Equities (NYSE/Nasdaq)",
-    "cme_micro": "Futuros CME Micros",
-    "forex": "Forex (FX)",
-    "crypto": "Crypto (24/7)",
-}
-cols = st.columns(4)
-for i, mkt in enumerate(["equity","cme_micro","forex","crypto"]):
-    opened = is_market_open(mkt, hora_actual)
-    icon = "🟢" if opened else "🔴"
-    status = "Abierto" if opened else "Cerrado"
-    with cols[i]:
-        st.markdown(f"**{labels[mkt]}**")
-        st.markdown(f"{icon} **{status}**")
+with col_markets:
+    st.subheader("📡 Mercados en tiempo real (ET)")
+    labels = {
+        "equity": "Equities (NYSE/Nasdaq)",
+        "cme_micro": "Futuros CME Micros",
+        "forex": "Forex (FX)",
+        "crypto": "Crypto (24/7)",
+    }
+    cols = st.columns(4)
+    for i, mkt in enumerate(["equity","cme_micro","forex","crypto"]):
+        opened = is_market_open(mkt, hora_actual)
+        icon = "🟢" if opened else "🔴"
+        status = "Abierto" if opened else "Cerrado"
+        with cols[i]:
+            st.markdown(f"**{labels[mkt]}**")
+            st.markdown(f"{icon} **{status}**")
 
 # Cargar datos
 df = load_data()
@@ -198,13 +191,8 @@ st.header("📊 Resumen Global de Señales")
 if df.empty:
     st.warning("⚠️ No hay datos aún.")
 else:
-    # Conteo por ticker
     ticker_counts = df["Ticker"].value_counts()
-
-    # Conteo de resultados
     result_counts = df["Resultado"].value_counts()
-
-    # Winrate global
     total_ops = result_counts.sum()
     winrate = round((result_counts.get("Win", 0) / total_ops) * 100, 2) if total_ops else 0.0
 
@@ -224,7 +212,6 @@ else:
     # Gráfico 2: Resultados (Win/Loss)
     st.subheader("🏆 Distribución de Resultados")
     fig2, ax2 = plt.subplots()
-    # Orden amigable si existen
     ordered = [c for c in ["Win","Loss","-"] if c in result_counts.index] + \
               [c for c in result_counts.index if c not in ["Win","Loss","-"]]
     result_counts.loc[ordered].plot(kind="bar", color=["green","red","gray"], ax=ax2)
