@@ -9,9 +9,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # =========================
-# 🔧 Config
+# 🔧 Configuración
 # =========================
-TZ = pytz.timezone("America/New_York")  # NJ/ET
+TZ = pytz.timezone("America/New_York")  # Zona horaria NJ/ET
 MICRO_TICKERS = {"MES","MNQ","MYM","M2K","MGC","MCL","M6E","M6B","M6A"}
 CRYPTO_TICKERS = {"BTCUSD","ETHUSD","SOLUSD","ADAUSD","XRPUSD"}
 FOREX_RE = re.compile(r"^[A-Z]{6}$")  # EURUSD, GBPUSD, etc.
@@ -73,7 +73,8 @@ def send_mail(subject: str, body: str, to_email: str=None):
 # =========================
 # 📈 Probabilidad multi-timeframe
 # =========================
-def ema(series, span): return series.ewm(span=span, adjust=False).mean()
+def ema(series, span): 
+    return series.ewm(span=span, adjust=False).mean()
 
 def rsi(series, period=14):
     delta = series.diff()
@@ -122,8 +123,10 @@ HEADERS = [
 
 def ensure_headers():
     vals = SHEET.get_all_values()
-    if not vals: SHEET.append_row(HEADERS)
-    elif vals[0] != HEADERS: SHEET.update("A1", [HEADERS])
+    if not vals: 
+        SHEET.append_row(HEADERS)
+    elif vals[0] != HEADERS: 
+        SHEET.update("A1", [HEADERS])
 
 def append_signal(row_dict: dict):
     ensure_headers()
@@ -145,8 +148,8 @@ def update_row_status(ticker, fecha_iso, estado=None, resultado=None, nota=None)
 # 🚦 Motor principal
 # =========================
 def process_signal(ticker: str, side: str, entry: float, notify_email: str=None):
-    t, market, open_now = now_et(), classify_market(ticker), is_market_open(classify_market(ticker), now_et())
-    pm, p1, p5, p15, p1h, pf = prob_multi_frame(ticker, side), None, None, None, None, None
+    t, market = now_et(), classify_market(ticker)
+    pm = prob_multi_frame(ticker, side)
     p1, p5, p15, p1h, pf = pm["per_frame"]["1m"], pm["per_frame"]["5m"], pm["per_frame"]["15m"], pm["per_frame"]["1h"], pm["final"]
 
     clasif = "≥80" if pf >= 80 else "<80"
@@ -165,12 +168,20 @@ def process_signal(ticker: str, side: str, entry: float, notify_email: str=None)
     }
     append_signal(base)
 
+    # Notificación opcional
+    if notify_email:
+        send_mail(
+            f"Señal {ticker} {side} {entry} – {pf}%",
+            f"Ticker: {ticker}\nLado: {side}\nEntrada: {entry}\nProbFinal: {pf}%\nClasificación: {clasif}",
+            notify_email
+        )
+
 # =========================
 # ▶️ Entry
 # =========================
 def main():
     ensure_headers()
-    # ejemplo de test manual
+    # Ejemplo manual (descomenta o cambia por alertas reales)
     process_signal("DKNG","Buy",45.30, notify_email=GMAIL_USER)
 
 if __name__=="__main__":
