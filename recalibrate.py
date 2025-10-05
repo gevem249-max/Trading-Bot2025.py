@@ -1,3 +1,4 @@
+# recalibrate.py — script independiente para recalibración de pesos
 import os, json, datetime as dt
 import pandas as pd
 import numpy as np
@@ -38,15 +39,6 @@ def macd(series, fast=12, slow=26, signal=9):
     signal_line = macd_line.ewm(span=signal, adjust=False).mean()
     return macd_line, signal_line
 
-# Detectar patrón martillo (Hammer) simple
-def is_hammer(df):
-    if df.empty: return False
-    o, h, l, c = df["Open"].iloc[-1], df["High"].iloc[-1], df["Low"].iloc[-1], df["Close"].iloc[-1]
-    cuerpo = abs(c - o)
-    sombra_inf = o - l if c > o else c - l
-    sombra_sup = h - c if c > o else h - o
-    return sombra_inf > 2*cuerpo and sombra_sup < cuerpo
-
 # ======================
 # Recalibración avanzada
 # ======================
@@ -69,13 +61,10 @@ def recalibrate():
     losses = (df["Resultado"] == "Loss").sum()
     winrate = round((wins / total) * 100, 2)
 
-    # Diferencia entre ganadores y perdedores
     avg_win_prob = df[df["Resultado"]=="Win"]["ProbFinal"].mean()
     avg_loss_prob = df[df["Resultado"]=="Loss"]["ProbFinal"].mean()
 
-    # ======================
-    # Multi-timeframe Sniper
-    # ======================
+    # Sniper rate básico
     sniper_hits, sniper_miss = 0, 0
     for tkr in df["Ticker"].unique():
         try:
@@ -101,9 +90,7 @@ def recalibrate():
 
     sniper_rate = round((sniper_hits / (sniper_hits + sniper_miss + 1e-6)) * 100, 2)
 
-    # ======================
-    # Ajuste dinámico
-    # ======================
+    # Ajuste dinámico de threshold
     new_threshold = max(70, min(90, int(avg_win_prob)))
     print(f"✅ Recalibración {dt.datetime.now()}")
     print(f"Total: {total} | Wins: {wins} | Losses: {losses} | Winrate: {winrate}%")
@@ -125,7 +112,6 @@ def recalibrate():
         ])
     except Exception as e:
         print("⚠️ No se pudo guardar calibración:", e)
-
 
 if __name__ == "__main__":
     recalibrate()
