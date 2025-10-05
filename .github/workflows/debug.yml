@@ -43,7 +43,11 @@ jobs:
           if not sid or not js:
               print("⛔ Falta secreto")
               raise SystemExit(0)
-          creds = Credentials.from_service_account_info(json.loads(js), scopes=["https://www.googleapis.com/auth/spreadsheets"])
+
+          creds = Credentials.from_service_account_info(
+              json.loads(js),
+              scopes=["https://www.googleapis.com/auth/spreadsheets"]
+          )
           gc = gspread.authorize(creds)
           ws = gc.open_by_key(sid).sheet1
           vals = ws.get_all_values()
