@@ -1,34 +1,34 @@
 name: Run Trading Bot
 
 on:
+  workflow_dispatch:   # manual
   schedule:
-    - cron: "*/5 * * * *"   # cada 5 minutos
-  workflow_dispatch:        # permite correrlo manualmente
+    - cron: "0 * * * *"   # cada hora en punto (UTC)
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: 📥 Checkout repo
         uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run bot
+      - name: 🚀 Run bot
         env:
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
           ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
           ALERT_MICROS: ${{ secrets.ALERT_MICROS }}
           ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
