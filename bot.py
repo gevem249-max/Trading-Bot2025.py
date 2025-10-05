@@ -327,6 +327,7 @@ def check_trade_outcomes():
 # =========================
 def main():
     ensure_headers()
+    # Demo: quita o cambia por tus señales reales
     process_signal("DKNG","Buy",45.3)
     check_pending_confirmations()
     check_trade_outcomes()
