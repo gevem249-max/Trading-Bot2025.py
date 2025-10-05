@@ -1,4 +1,4 @@
-name: Recalibrate Bot
+name: Recalibrate Weights
 
 on:
   schedule:
@@ -8,6 +8,7 @@ on:
 jobs:
   recalibrate:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -27,4 +28,7 @@ jobs:
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
         run: |
-          python -c "from bot import recalibrate_weights_from_sheet; print(recalibrate_weights_from_sheet())"
+          python - <<'PY'
+from bot import recalibrate_weights_from_sheet
+print("Recalibration result:", recalibrate_weights_from_sheet())
+PY
