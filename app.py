@@ -125,3 +125,44 @@ with tabs[5]:
         st.warning("⚠️ No hay señales recientes.")
     else:
         st.dataframe(df.tail(10))
+
+# =========================
+# 📊 Resumen global
+# =========================
+st.header("📊 Resumen Global de Señales")
+
+if df.empty:
+    st.warning("⚠️ No hay datos aún.")
+else:
+    # Conteo por ticker
+    ticker_counts = df["Ticker"].value_counts()
+
+    # Conteo de resultados
+    result_counts = df["Resultado"].value_counts()
+
+    # Winrate
+    if "Win" in result_counts and result_counts.sum() > 0:
+        winrate = round((result_counts.get("Win", 0) / result_counts.sum()) * 100, 2)
+    else:
+        winrate = 0
+
+    col1, col2, col3 = st.columns(3)
+    col1.metric("Total de señales", len(df))
+    col2.metric("Ganadas", result_counts.get("Win", 0))
+    col3.metric("Winrate (%)", f"{winrate}%")
+
+    # Gráfico 1: Señales por Ticker
+    st.subheader("📌 Señales por Ticker")
+    fig1, ax1 = plt.subplots()
+    ticker_counts.plot(kind="bar", color="skyblue", ax=ax1)
+    ax1.set_title("Cantidad de señales por Ticker")
+    ax1.set_ylabel("Señales")
+    st.pyplot(fig1)
+
+    # Gráfico 2: Resultados (Win/Loss)
+    st.subheader("🏆 Distribución de Resultados")
+    fig2, ax2 = plt.subplots()
+    result_counts.plot(kind="bar", color=["green", "red", "gray"], ax=ax2)
+    ax2.set_title("Resultados Win/Loss")
+    ax2.set_ylabel("Cantidad")
+    st.pyplot(fig2)
