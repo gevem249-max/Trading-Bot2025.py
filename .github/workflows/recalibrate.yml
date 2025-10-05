@@ -1,34 +1,37 @@
-name: Recalibrate Weights
+name: Recalibrate Bot Weights
 
 on:
+  workflow_dispatch:    # manual
   schedule:
-    - cron: "0 */6 * * *"   # cada 6 horas
-  workflow_dispatch:
+    - cron: "30 23 * * *"   # todos los días a las 23:30 UTC
 
 jobs:
   recalibrate:
     runs-on: ubuntu-latest
 
     steps:
-      - name: Checkout repo
+      - name: 📥 Checkout repo
         uses: actions/checkout@v3
 
-      - name: Set up Python
+      - name: 🐍 Setup Python
         uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
-      - name: Install dependencies
+      - name: 📦 Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run recalibration
+      - name: 🔄 Run recalibration
         env:
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
         run: |
-          python - <<'PY'
-from bot import recalibrate_weights_from_sheet
-print("Recalibration result:", recalibrate_weights_from_sheet())
-PY
+          python - <<'EOF'
+          from bot import recalibrate_weights_from_sheet
+          result = recalibrate_weights_from_sheet()
+          print("Recalibration result:", result)
+          EOF
