@@ -6,9 +6,6 @@ python-dateutil
 pytz
 matplotlib
 
-# Gráficos avanzados
-mplfinance
-
 # HTTP / utilitarios
 requests
 
@@ -16,10 +13,11 @@ requests
 gspread
 google-auth
 
-# Streamlit (panel) + auto-refresh
+# Streamlit (panel) + autorefresh
 streamlit
 streamlit-autorefresh
 
-# Opcionales útiles para debugging
+# Opcionales útiles para análisis y gráficos
+mplfinance
 ipython
 tqdm
