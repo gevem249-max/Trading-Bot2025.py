@@ -1,4 +1,4 @@
-# app.py — Panel de Señales Trading Bot 2025 (completo actualizado)
+# app.py — Panel de Señales Trading Bot 2025 (completo con fixes)
 
 import os, json, pytz, datetime as dt
 import pandas as pd
@@ -36,10 +36,12 @@ def is_market_open(market: str, t: dt.datetime) -> bool:
     minutes = h * 60 + m
 
     if market == "equity":
-        if wd >= 5: return False
+        if wd >= 5:  # fin de semana
+            return False
         return (9*60 + 30) <= minutes < (16*60)
 
     if market == "cme_micro":
+        # Cierra viernes 17:00, reabre domingo 18:00. Pausa diaria 17:00–18:00.
         if wd == 5: return False
         if wd == 6 and minutes < (18*60): return False
         if wd == 4 and minutes >= (17*60): return False
@@ -68,16 +70,26 @@ def load_data() -> pd.DataFrame:
             "Prob_1m","Prob_5m","Prob_15m","Prob_1h","ProbFinal",
             "Estado","Resultado","Nota","Mercado"
         ])
-    return pd.DataFrame(values)
+    df = pd.DataFrame(values)
+
+    # 🔧 Normalizar tipos para evitar ArrowTypeError
+    for col in df.columns:
+        if col in ["Entrada","Prob_1m","Prob_5m","Prob_15m","Prob_1h","ProbFinal"]:
+            df[col] = pd.to_numeric(df[col], errors="coerce")
+        else:
+            df[col] = df[col].astype(str)
+
+    return df
 
 # =========================
-# 📈 Yahoo Finance (OHLCV limpio)
+# 📈 Yahoo Finance (limpieza robusta)
 # =========================
 def fetch_yf_clean(ticker: str, interval: str, period: str):
     df = yf.download(
         ticker, interval=interval, period=period,
         auto_adjust=True, progress=False, threads=False
     )
+
     if df is None or df.empty:
         return pd.DataFrame()
 
@@ -102,13 +114,11 @@ def fetch_yf_clean(ticker: str, interval: str, period: str):
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df.copy()
-    out = df.copy()
 
-    # EMA 13/21
+    out = df.copy()
     out["EMA13"] = out["Close"].ewm(span=13, adjust=False).mean()
     out["EMA21"] = out["Close"].ewm(span=21, adjust=False).mean()
 
-    # RSI 14
     delta = out["Close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -118,7 +128,6 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     out["RSI"] = 100 - (100 / (1 + rs))
     out["RSI"] = out["RSI"].fillna(method="bfill")
 
-    # MACD (12,26,9)
     ema12 = out["Close"].ewm(span=12, adjust=False).mean()
     ema26 = out["Close"].ewm(span=26, adjust=False).mean()
     out["MACD"] = ema12 - ema26
@@ -135,7 +144,7 @@ def plot_candles(df: pd.DataFrame, title: str):
         mpf.make_addplot(df["Signal"], panel=2, color="red"),
     ]
     fig, _ = mpf.plot(
-        df,
+        df.tail(500),  # 🔧 limitar a últimas 500 velas para no saturar
         type="candle",
         style="yahoo",
         volume=True,
@@ -143,7 +152,8 @@ def plot_candles(df: pd.DataFrame, title: str):
         title=title,
         figratio=(16,9),
         figscale=1.2,
-        returnfig=True
+        returnfig=True,
+        warn_too_much_data=1000
     )
     return fig
 
@@ -151,7 +161,9 @@ def plot_candles(df: pd.DataFrame, title: str):
 # 🎨 UI — Streamlit
 # =========================
 st.set_page_config(page_title="Panel de Señales", layout="wide")
-st_autorefresh(interval=20000, key="refresh")  # refrescar cada 20s
+
+# 🔄 Refresco automático cada 20 segundos
+st_autorefresh(interval=20000, key="refresh")
 
 hora_actual = now_et()
 labels = {"equity":"Equities", "cme_micro":"CME Micros", "forex":"Forex", "crypto":"Crypto"}
@@ -173,18 +185,26 @@ df = load_data()
 # 📑 Pestañas
 # =========================
 tabs = st.tabs([
+    "🕒 Últimas Señales",
     "✅ Señales Enviadas",
     "❌ Descartadas",
     "📈 Resultados Hoy",
     "📊 Histórico",
     "📉 Distribución Probabilidades",
-    "🕒 Últimas Señales",
     "📊 Resumen Global",
     "📈 Gráfico Avanzado"
 ])
 
-# 1) Señales enviadas
+# 1) Últimas señales
 with tabs[0]:
+    st.subheader("🕒 Últimas Señales Registradas")
+    if df.empty:
+        st.warning("⚠️ No hay señales recientes.")
+    else:
+        st.dataframe(df.tail(10), use_container_width=True)
+
+# 2) Señales enviadas
+with tabs[1]:
     st.subheader("✅ Señales enviadas (≥80%)")
     sent = df[df["Estado"].isin(["Pre","Confirmada","Confirmado"])] if not df.empty else pd.DataFrame()
     if sent.empty:
@@ -192,8 +212,8 @@ with tabs[0]:
     else:
         st.dataframe(sent, use_container_width=True)
 
-# 2) Descartadas
-with tabs[1]:
+# 3) Descartadas
+with tabs[2]:
     st.subheader("❌ Señales descartadas (<80%)")
     disc = df[df["Estado"].eq("Descartada")] if not df.empty else pd.DataFrame()
     if disc.empty:
@@ -201,8 +221,8 @@ with tabs[1]:
     else:
         st.dataframe(disc, use_container_width=True)
 
-# 3) Resultados hoy
-with tabs[2]:
+# 4) Resultados hoy
+with tabs[3]:
     st.subheader("📈 Resultados de Hoy")
     if df.empty:
         st.warning("⚠️ No hay resultados hoy.")
@@ -220,16 +240,16 @@ with tabs[2]:
             ax.set_ylabel("Cantidad")
             st.pyplot(fig)
 
-# 4) Histórico
-with tabs[3]:
+# 5) Histórico
+with tabs[4]:
     st.subheader("📊 Histórico Completo")
     if df.empty:
         st.warning("⚠️ No hay histórico todavía.")
     else:
         st.dataframe(df, use_container_width=True)
 
-# 5) Distribución Probabilidades
-with tabs[4]:
+# 6) Distribución Probabilidades
+with tabs[5]:
     st.subheader("📉 Distribución de Probabilidades")
     if df.empty or "ProbFinal" not in df.columns:
         st.warning("⚠️ No hay datos de probabilidades.")
@@ -240,14 +260,6 @@ with tabs[4]:
         ax.set_xlabel("Probabilidad final")
         ax.set_ylabel("Frecuencia")
         st.pyplot(fig)
-
-# 6) Últimas señales (ordenadas de más recientes a más viejas)
-with tabs[5]:
-    st.subheader("🕒 Últimas Señales Registradas")
-    if df.empty:
-        st.warning("⚠️ No hay señales recientes.")
-    else:
-        st.dataframe(df.iloc[::-1].head(10), use_container_width=True)
 
 # 7) Resumen Global
 with tabs[6]:
@@ -283,14 +295,20 @@ with tabs[7]:
     st.subheader("📈 Gráfico Avanzado (Velas + Indicadores)")
 
     mercados = {
-        "S&P 500 Mini (ES)": "ES=F",
-        "Nasdaq 100 Mini (NQ)": "NQ=F",
+        # Futuros CME grandes y micros
+        "S&P 500 Mini (ES/MES)": "ES=F",
+        "Nasdaq 100 Mini (NQ/MNQ)": "NQ=F",
         "Dow Jones (YM/MYM)": "YM=F",
         "Russell 2000 (RTY/M2K)": "RTY=F",
-        "Oro (GC)": "GC=F",
-        "Crudo (CL)": "CL=F",
+        "Oro (GC/MGC)": "GC=F",
+        "Crudo (CL/MCL)": "CL=F",
+        # Forex
         "EUR/USD": "EURUSD=X",
+        "GBP/USD": "GBPUSD=X",
+        "USD/JPY": "JPY=X",
+        # Cripto
         "Bitcoin/USD": "BTC-USD",
+        "Ethereum/USD": "ETH-USD"
     }
     timeframes = {
         "1 minuto": ("1m", "7d"),
@@ -314,22 +332,5 @@ with tabs[7]:
             df_plot = add_indicators(base)
             fig = plot_candles(df_plot, f"{mercado_sel} — {timeframe_sel}")
             st.pyplot(fig)
-
-            # Evaluación manual
-            st.subheader("🎯 Evaluación manual de entrada")
-            entry_price = st.number_input("Precio de entrada:", value=0.0)
-            if entry_price > 0:
-                last_close = df_plot["Close"].iloc[-1]
-                ema13 = df_plot["EMA13"].iloc[-1]
-                ema21 = df_plot["EMA21"].iloc[-1]
-                rsi_val = df_plot["RSI"].iloc[-1]
-
-                msg = f"Último cierre: {last_close:.2f} | EMA13: {ema13:.2f} | EMA21: {ema21:.2f} | RSI: {rsi_val:.1f}"
-                if last_close > ema13 > ema21 and rsi_val < 70:
-                    st.success("✅ Alta probabilidad de compra\n\n" + msg)
-                elif last_close < ema13 < ema21 and rsi_val > 30:
-                    st.error("❌ Alta probabilidad de venta\n\n" + msg)
-                else:
-                    st.warning("⚠️ Señal neutral\n\n" + msg)
     except Exception as e:
         st.error(f"Error cargando {yf_ticker}: {e}")
