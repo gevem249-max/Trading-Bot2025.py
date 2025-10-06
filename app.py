@@ -84,9 +84,9 @@ def add_indicators(df):
     df["EMA13"] = df["Close"].ewm(span=13, adjust=False).mean()
     df["EMA21"] = df["Close"].ewm(span=21, adjust=False).mean()
 
-    delta = df["Close"].diff()
-    gain = np.where(delta > 0, delta, 0)
-    loss = np.where(delta < 0, -delta, 0)
+    delta = df["Close"].diff().fillna(0)
+    gain = np.where(delta > 0, delta, 0).ravel()
+    loss = np.where(delta < 0, -delta, 0).ravel()
     roll_up = pd.Series(gain).rolling(14).mean()
     roll_down = pd.Series(loss).rolling(14).mean()
     RS = roll_up / roll_down
@@ -162,25 +162,66 @@ df = load_data()
 # 📑 Tabs
 # =========================
 tabs = st.tabs([
-    "✅ Últimas Señales",
+    "✅ Señales Enviadas",
+    "❌ Descartadas",
+    "📈 Resultados Hoy",
+    "📊 Histórico",
+    "📉 Distribución Probabilidades",
+    "🕒 Últimas Señales",
     "📊 Resumen Global",
     "📈 Gráfico Avanzado"
 ])
 
 # 1. Señales enviadas
 with tabs[0]:
-    st.subheader("✅ Últimas Señales Registradas")
-    if df.empty:
-        st.warning("⚠️ No hay señales recientes.")
-    else:
-        st.dataframe(df.tail(10))
+    sent = df[df["Estado"].isin(["Pre","Confirmada"])]
+    st.subheader("✅ Señales enviadas (≥80%)")
+    st.dataframe(sent if not sent.empty else pd.DataFrame())
 
-# 2. Resumen Global
+# 2. Descartadas
 with tabs[1]:
-    st.subheader("📊 Resumen Global de Señales")
-    if df.empty:
-        st.warning("⚠️ No hay datos aún.")
+    disc = df[df["Estado"]=="Descartada"]
+    st.subheader("❌ Señales descartadas (<80%)")
+    st.dataframe(disc if not disc.empty else pd.DataFrame())
+
+# 3. Resultados de hoy
+with tabs[2]:
+    st.subheader("📈 Resultados de Hoy")
+    today = hora_actual.strftime("%Y-%m-%d")
+    today_df = df[df["FechaISO"] == today]
+    if today_df.empty:
+        st.warning("⚠️ No hay resultados hoy.")
     else:
+        st.dataframe(today_df)
+        winloss_data = today_df.groupby(["Resultado"]).size()
+        fig, ax = plt.subplots()
+        winloss_data.plot(kind="bar", color=["green","red","gray"], ax=ax)
+        ax.set_title("Resultados Win/Loss (Hoy)")
+        st.pyplot(fig)
+
+# 4. Histórico
+with tabs[3]:
+    st.subheader("📊 Histórico Completo")
+    st.dataframe(df if not df.empty else pd.DataFrame())
+
+# 5. Distribución de probabilidades
+with tabs[4]:
+    st.subheader("📉 Distribución de Probabilidades")
+    if not df.empty:
+        fig, ax = plt.subplots()
+        df["ProbFinal"].hist(bins=20, ax=ax, color="skyblue", edgecolor="black")
+        ax.set_title("Distribución de Probabilidades")
+        st.pyplot(fig)
+
+# 6. Últimas señales
+with tabs[5]:
+    st.subheader("🕒 Últimas Señales Registradas")
+    st.dataframe(df.tail(10) if not df.empty else pd.DataFrame())
+
+# 7. Resumen Global
+with tabs[6]:
+    st.subheader("📊 Resumen Global de Señales")
+    if not df.empty:
         ticker_counts = df["Ticker"].value_counts()
         result_counts = df["Resultado"].value_counts()
         total_ops = result_counts.sum()
@@ -191,24 +232,8 @@ with tabs[1]:
         col2.metric("Ganadas", int(result_counts.get("Win", 0)))
         col3.metric("Winrate (%)", f"{winrate}%")
 
-        st.subheader("📌 Señales por Ticker")
-        fig1, ax1 = plt.subplots()
-        ticker_counts.plot(kind="bar", color="skyblue", ax=ax1)
-        ax1.set_title("Cantidad de señales por Ticker")
-        ax1.set_ylabel("Señales")
-        st.pyplot(fig1)
-
-        st.subheader("🏆 Distribución de Resultados")
-        fig2, ax2 = plt.subplots()
-        ordered = [c for c in ["Win","Loss","-"] if c in result_counts.index] + \
-                  [c for c in result_counts.index if c not in ["Win","Loss","-"]]
-        result_counts.loc[ordered].plot(kind="bar", color=["green","red","gray"], ax=ax2)
-        ax2.set_title("Resultados Win/Loss")
-        ax2.set_ylabel("Cantidad")
-        st.pyplot(fig2)
-
-# 3. Gráfico Avanzado
-with tabs[2]:
+# 8. Gráfico Avanzado
+with tabs[7]:
     st.subheader("📈 Gráfico Avanzado (Velas + Indicadores)")
 
     mercados = {
@@ -222,7 +247,6 @@ with tabs[2]:
         "Bitcoin": "BTC-USD",
         "Ethereum": "ETH-USD"
     }
-
     timeframes = {
         "1 minuto": "1m",
         "5 minutos": "5m",
@@ -236,7 +260,6 @@ with tabs[2]:
 
     df_chart = plot_chart(mercados[mercado], tf_label, timeframes[tf_label])
 
-    # Evaluación manual
     st.subheader("🎯 Evaluación de entrada manual")
     entrada = st.number_input("Precio de entrada:", value=0.0, format="%.2f")
 
