@@ -17,12 +17,8 @@ google-auth-httplib2==0.2.0
 # Plotting
 matplotlib==3.8.4
 
-# Evitar ArrowTypeError en Streamlit (usar versión estable anterior)
+# Para evitar el ArrowTypeError con streamlit
 pyarrow==13.0.0
 
-# Timezone
+# Otros
 pytz==2024.1
-
-# Extra: librerías seguras de compatibilidad
-requests==2.32.3
-python-dateutil==2.9.0.post0
