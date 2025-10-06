@@ -17,7 +17,7 @@ google-auth-httplib2==0.2.0
 # Plotting
 matplotlib==3.8.4
 
-# Para evitar el ArrowTypeError con streamlit
+# PyArrow – versión estable que no requiere cmake
 pyarrow==13.0.0
 
 # Otros
