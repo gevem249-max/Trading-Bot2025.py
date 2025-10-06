@@ -1,12 +1,13 @@
-# app.py — Panel de Señales Trading Bot 2025
+# app.py — Panel de señales Trading Bot
 import os, json, pytz, datetime as dt
 import pandas as pd
+import numpy as np
 import gspread
-from google.oauth2.service_account import Credentials
-import streamlit as st
-import matplotlib.pyplot as plt
 import yfinance as yf
+import matplotlib.pyplot as plt
 import mplfinance as mpf
+import streamlit as st
+from google.oauth2.service_account import Credentials
 
 # =========================
 # 🔧 Config
@@ -72,6 +73,34 @@ def load_data() -> pd.DataFrame:
         ])
     return pd.DataFrame(values)
 
+# Cargar datos desde Yahoo Finance con indicadores
+def cargar_datos_yf(ticker, interval, period="5d"):
+    df = yf.download(ticker, interval=interval, period=period, auto_adjust=True)
+    if df.empty:
+        return df
+    df.dropna(inplace=True)
+
+    # EMA 13 y EMA 21
+    df["EMA13"] = df["Close"].ewm(span=13, adjust=False).mean()
+    df["EMA21"] = df["Close"].ewm(span=21, adjust=False).mean()
+
+    # RSI
+    delta = df["Close"].diff()
+    gain = np.where(delta > 0, delta, 0)
+    loss = np.where(delta < 0, -delta, 0)
+    avg_gain = pd.Series(gain).rolling(14).mean()
+    avg_loss = pd.Series(loss).rolling(14).mean()
+    rs = avg_gain / avg_loss
+    df["RSI"] = 100 - (100 / (1 + rs))
+
+    # MACD
+    exp1 = df["Close"].ewm(span=12, adjust=False).mean()
+    exp2 = df["Close"].ewm(span=26, adjust=False).mean()
+    df["MACD"] = exp1 - exp2
+    df["Signal"] = df["MACD"].ewm(span=9, adjust=False).mean()
+
+    return df
+
 # =========================
 # 🎨 Dashboard
 # =========================
@@ -103,7 +132,7 @@ st.title("📊 Panel de Señales - Trading Bot 2025")
 # Estado del bot
 st.success("😊 Bot Activo – corriendo en tiempo real")
 
-# Cargar datos
+# Cargar datos de señales
 df = load_data()
 
 # =========================
@@ -116,7 +145,8 @@ tabs = st.tabs([
     "📊 Histórico",
     "📉 Distribución Probabilidades",
     "🕒 Últimas Señales",
-    "📉 Gráfico Avanzado"
+    "📊 Resumen Global",
+    "📈 Gráfico Avanzado"
 ])
 
 # 1. Señales enviadas
@@ -182,138 +212,89 @@ with tabs[5]:
     else:
         st.dataframe(df.tail(10))
 
-# 7. Gráfico avanzado con velas + indicadores
+# 7. Resumen global
 with tabs[6]:
-    st.subheader("📉 Gráfico Avanzado (Velas + Indicadores)")
-
-    # Selección de mercado y timeframe
-    mercados = {
-        "S&P 500 Micro (MES)": "MES=F",
-        "Dow Jones Micro (MYM)": "MYM=F",
-        "Nasdaq Micro (MNQ)": "MNQ=F",
-        "Russell 2000 Micro (M2K)": "M2K=F",
-        "Crudo WTI": "CL=F",
-        "Oro": "GC=F"
-    }
-
-    timeframes = {
-        "1 minuto": ("1m", "1d"),
-        "5 minutos": ("5m", "5d"),
-        "15 minutos": ("15m", "5d"),
-        "1 hora": ("1h", "1mo"),
-        "1 día": ("1d", "1y")
-    }
-
-    col_mkt, col_tf = st.columns(2)
-    with col_mkt:
-        mercado = st.selectbox("Selecciona mercado:", list(mercados.keys()))
-    with col_tf:
-        tf = st.selectbox("Selecciona timeframe:", list(timeframes.keys()))
-
-    ticker = mercados[mercado]
-    intervalo, periodo = timeframes[tf]
-
-    # Función para cargar datos
-    def cargar_datos_yf(ticker, intervalo="5m", periodo="5d"):
-        df = yf.download(ticker, interval=intervalo, period=periodo)
-        if df.empty:
-            return df
-        df = df[["Open","High","Low","Close","Volume"]].dropna()
-        df = df.astype(float)
-        return df
-
-    df_yf = cargar_datos_yf(ticker, intervalo, periodo)
-
-    if df_yf.empty:
-        st.error(f"No se pudieron descargar datos para {ticker}")
+    st.header("📊 Resumen Global de Señales")
+    if df.empty:
+        st.warning("⚠️ No hay datos aún.")
     else:
-        # EMA 13 y EMA 21
-        df_yf["EMA13"] = df_yf["Close"].ewm(span=13).mean()
-        df_yf["EMA21"] = df_yf["Close"].ewm(span=21).mean()
+        ticker_counts = df["Ticker"].value_counts()
+        result_counts = df["Resultado"].value_counts()
+        total_ops = result_counts.sum()
+        winrate = round((result_counts.get("Win", 0) / total_ops) * 100, 2) if total_ops else 0.0
 
-        # RSI
-        delta = df_yf["Close"].diff()
-        up = delta.clip(lower=0)
-        down = -1*delta.clip(upper=0)
-        roll_up = up.rolling(14).mean()
-        roll_down = down.rolling(14).mean()
-        rs = roll_up / roll_down
-        df_yf["RSI"] = 100 - (100 / (1 + rs))
+        col1, col2, col3 = st.columns(3)
+        col1.metric("Total de señales", len(df))
+        col2.metric("Ganadas", int(result_counts.get("Win", 0)))
+        col3.metric("Winrate (%)", f"{winrate}%")
 
-        # MACD
-        exp1 = df_yf["Close"].ewm(span=12, adjust=False).mean()
-        exp2 = df_yf["Close"].ewm(span=26, adjust=False).mean()
-        df_yf["MACD"] = exp1 - exp2
-        df_yf["Signal"] = df_yf["MACD"].ewm(span=9, adjust=False).mean()
+        st.subheader("📌 Señales por Ticker")
+        fig1, ax1 = plt.subplots()
+        ticker_counts.plot(kind="bar", color="skyblue", ax=ax1)
+        ax1.set_title("Cantidad de señales por Ticker")
+        ax1.set_ylabel("Señales")
+        st.pyplot(fig1)
 
-        # Graficar velas + EMA con mplfinance
-        addplots = [
-            mpf.make_addplot(df_yf["EMA13"], color="blue"),
-            mpf.make_addplot(df_yf["EMA21"], color="red")
-        ]
-
-        fig, axes = mpf.plot(
-            df_yf,
-            type="candle",
-            style="charles",
-            volume=True,
-            addplot=addplots,
-            returnfig=True,
-            figratio=(16,9),
-            figscale=1.2
-        )
-        st.pyplot(fig)
-
-        # RSI y MACD como subplots
-        st.subheader("📈 Indicadores")
-        fig2, (ax1, ax2) = plt.subplots(2, 1, figsize=(10,6))
-
-        # RSI
-        ax1.plot(df_yf.index, df_yf["RSI"], label="RSI", color="purple")
-        ax1.axhline(70, linestyle="--", color="red")
-        ax1.axhline(30, linestyle="--", color="green")
-        ax1.set_title("RSI")
-        ax1.legend()
-
-        # MACD
-        ax2.plot(df_yf.index, df_yf["MACD"], label="MACD", color="blue")
-        ax2.plot(df_yf.index, df_yf["Signal"], label="Signal", color="orange")
-        ax2.axhline(0, linestyle="--", color="black")
-        ax2.set_title("MACD")
-        ax2.legend()
-
+        st.subheader("🏆 Distribución de Resultados")
+        fig2, ax2 = plt.subplots()
+        ordered = [c for c in ["Win","Loss","-"] if c in result_counts.index] + \
+                [c for c in result_counts.index if c not in ["Win","Loss","-"]]
+        result_counts.loc[ordered].plot(kind="bar", color=["green","red","gray"], ax=ax2)
+        ax2.set_title("Resultados Win/Loss")
+        ax2.set_ylabel("Cantidad")
         st.pyplot(fig2)
 
-# =========================
-# 📊 Resumen global
-# =========================
-st.header("📊 Resumen Global de Señales")
+# 8. Gráfico avanzado con velas + indicadores
+with tabs[7]:
+    st.header("📈 Gráfico Avanzado (Velas + Indicadores)")
 
-if df.empty:
-    st.warning("⚠️ No hay datos aún.")
-else:
-    ticker_counts = df["Ticker"].value_counts()
-    result_counts = df["Resultado"].value_counts()
-    total_ops = result_counts.sum()
-    winrate = round((result_counts.get("Win", 0) / total_ops) * 100, 2) if total_ops else 0.0
+    mercados = {
+        "S&P 500 Mini (ES)": "ES=F",
+        "Nasdaq Mini (NQ)": "NQ=F",
+        "Dow Jones Micro (MYM)": "YM=F",
+        "Russell 2000 (M2K)": "RTY=F",
+        "Crudo WTI": "CL=F",
+        "Oro": "GC=F",
+        "Ethereum": "ETH-USD",
+        "Bitcoin": "BTC-USD"
+    }
+    timeframes = {
+        "1 minuto": "1m",
+        "5 minutos": "5m",
+        "15 minutos": "15m",
+        "1 hora": "1h",
+        "1 día": "1d"
+    }
 
-    col1, col2, col3 = st.columns(3)
-    col1.metric("Total de señales", len(df))
-    col2.metric("Ganadas", int(result_counts.get("Win", 0)))
-    col3.metric("Winrate (%)", f"{winrate}%")
+    mercado = st.selectbox("Selecciona mercado:", list(mercados.keys()))
+    tf = st.selectbox("Selecciona timeframe:", list(timeframes.keys()))
 
-    st.subheader("📌 Señales por Ticker")
-    fig1, ax1 = plt.subplots()
-    ticker_counts.plot(kind="bar", color="skyblue", ax=ax1)
-    ax1.set_title("Cantidad de señales por Ticker")
-    ax1.set_ylabel("Señales")
-    st.pyplot(fig1)
-
-    st.subheader("🏆 Distribución de Resultados")
-    fig2, ax2 = plt.subplots()
-    ordered = [c for c in ["Win","Loss","-"] if c in result_counts.index] + \
-              [c for c in result_counts.index if c not in ["Win","Loss","-"]]
-    result_counts.loc[ordered].plot(kind="bar", color=["green","red","gray"], ax=ax2)
-    ax2.set_title("Resultados Win/Loss")
-    ax2.set_ylabel("Cantidad")
-    st.pyplot(fig2)
+    if mercado and tf:
+        ticker = mercados[mercado]
+        interval = timeframes[tf]
+        try:
+            df_yf = cargar_datos_yf(ticker, interval)
+            if df_yf.empty:
+                st.error("⚠️ No se pudo cargar el mercado.")
+            else:
+                # Gráfico principal con velas
+                addplots = [
+                    mpf.make_addplot(df_yf["EMA13"], color="blue"),
+                    mpf.make_addplot(df_yf["EMA21"], color="red"),
+                    mpf.make_addplot(df_yf["RSI"], panel=1, color="purple"),
+                    mpf.make_addplot(df_yf["MACD"], panel=2, color="green"),
+                    mpf.make_addplot(df_yf["Signal"], panel=2, color="orange")
+                ]
+                fig, _ = mpf.plot(
+                    df_yf,
+                    type="candle",
+                    style="yahoo",
+                    addplot=addplots,
+                    title=f"{mercado} ({tf})",
+                    volume=True,
+                    figsize=(10,8),
+                    returnfig=True
+                )
+                st.pyplot(fig)
+        except Exception as e:
+            st.error(f"Error cargando {ticker}: {e}")
