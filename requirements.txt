@@ -1,23 +1,23 @@
-# Core  
-pandas  
-numpy  
-yfinance  
-python-dateutil  
-pytz  
-matplotlib  
-
-# HTTP / utilitarios  
-requests  
-
-# Google Sheets + auth  
-gspread  
-google-auth  
-
-# Streamlit (panel) + util y refresco automático  
-streamlit  
-streamlit-autorefresh  
-
-# Opcionales útiles para análisis / debugging (recomendados)  
-ipython  
-tqdm  
+# Core
+pandas
+numpy
+yfinance
+python-dateutil
+pytz
+matplotlib
 mplfinance
+
+# HTTP / utilitarios
+requests
+
+# Google Sheets + auth
+gspread
+google-auth
+
+# Streamlit (panel)
+streamlit
+streamlit-autorefresh
+
+# Opcionales útiles para análisis / debugging (recomendados)
+ipython
+tqdm
