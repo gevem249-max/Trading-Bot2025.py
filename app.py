@@ -1,4 +1,4 @@
-# app.py — Panel de Señales Trading Bot 2025 (completo con fixes)
+# app.py — Panel de Señales Trading Bot 2025 (completo)
 
 import os, json, pytz, datetime as dt
 import pandas as pd
@@ -9,7 +9,6 @@ from google.oauth2.service_account import Credentials
 import streamlit as st
 import matplotlib.pyplot as plt
 import mplfinance as mpf
-from streamlit_autorefresh import st_autorefresh
 
 # =========================
 # 🔧 Configuración
@@ -36,12 +35,11 @@ def is_market_open(market: str, t: dt.datetime) -> bool:
     minutes = h * 60 + m
 
     if market == "equity":
-        if wd >= 5:  # fin de semana
+        if wd >= 5:
             return False
         return (9*60 + 30) <= minutes < (16*60)
 
     if market == "cme_micro":
-        # Cierra viernes 17:00, reabre domingo 18:00. Pausa diaria 17:00–18:00.
         if wd == 5: return False
         if wd == 6 and minutes < (18*60): return False
         if wd == 4 and minutes >= (17*60): return False
@@ -70,16 +68,7 @@ def load_data() -> pd.DataFrame:
             "Prob_1m","Prob_5m","Prob_15m","Prob_1h","ProbFinal",
             "Estado","Resultado","Nota","Mercado"
         ])
-    df = pd.DataFrame(values)
-
-    # 🔧 Normalizar tipos para evitar ArrowTypeError
-    for col in df.columns:
-        if col in ["Entrada","Prob_1m","Prob_5m","Prob_15m","Prob_1h","ProbFinal"]:
-            df[col] = pd.to_numeric(df[col], errors="coerce")
-        else:
-            df[col] = df[col].astype(str)
-
-    return df
+    return pd.DataFrame(values)
 
 # =========================
 # 📈 Yahoo Finance (limpieza robusta)
@@ -89,36 +78,28 @@ def fetch_yf_clean(ticker: str, interval: str, period: str):
         ticker, interval=interval, period=period,
         auto_adjust=True, progress=False, threads=False
     )
-
     if df is None or df.empty:
         return pd.DataFrame()
-
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = [c[0] for c in df.columns]
-
     for col in ["Open","High","Low","Close","Adj Close","Volume"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce")
-
     keep = [c for c in ["Open","High","Low","Close","Volume"] if c in df.columns]
     df = df[keep].dropna(subset=["Open","High","Low","Close"])
     if "Volume" in df.columns:
         df["Volume"] = df["Volume"].fillna(0)
-
     df = df.astype({c: float for c in ["Open","High","Low","Close"] if c in df.columns})
     if "Volume" in df.columns:
         df["Volume"] = df["Volume"].astype(float)
-
     return df
 
 def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     if df is None or df.empty:
         return df.copy()
-
     out = df.copy()
     out["EMA13"] = out["Close"].ewm(span=13, adjust=False).mean()
     out["EMA21"] = out["Close"].ewm(span=21, adjust=False).mean()
-
     delta = out["Close"].diff()
     gain = delta.clip(lower=0)
     loss = -delta.clip(upper=0)
@@ -127,12 +108,10 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     rs = avg_gain / (avg_loss.replace(0, np.nan))
     out["RSI"] = 100 - (100 / (1 + rs))
     out["RSI"] = out["RSI"].fillna(method="bfill")
-
     ema12 = out["Close"].ewm(span=12, adjust=False).mean()
     ema26 = out["Close"].ewm(span=26, adjust=False).mean()
     out["MACD"] = ema12 - ema26
     out["Signal"] = out["MACD"].ewm(span=9, adjust=False).mean()
-
     return out
 
 def plot_candles(df: pd.DataFrame, title: str):
@@ -144,7 +123,7 @@ def plot_candles(df: pd.DataFrame, title: str):
         mpf.make_addplot(df["Signal"], panel=2, color="red"),
     ]
     fig, _ = mpf.plot(
-        df.tail(500),  # 🔧 limitar a últimas 500 velas para no saturar
+        df,
         type="candle",
         style="yahoo",
         volume=True,
@@ -152,8 +131,7 @@ def plot_candles(df: pd.DataFrame, title: str):
         title=title,
         figratio=(16,9),
         figscale=1.2,
-        returnfig=True,
-        warn_too_much_data=1000
+        returnfig=True
     )
     return fig
 
@@ -161,10 +139,6 @@ def plot_candles(df: pd.DataFrame, title: str):
 # 🎨 UI — Streamlit
 # =========================
 st.set_page_config(page_title="Panel de Señales", layout="wide")
-
-# 🔄 Refresco automático cada 20 segundos
-st_autorefresh(interval=20000, key="refresh")
-
 hora_actual = now_et()
 labels = {"equity":"Equities", "cme_micro":"CME Micros", "forex":"Forex", "crypto":"Crypto"}
 st.markdown("### ⏰ Hora local (ET): " + hora_actual.strftime("%Y-%m-%d %H:%M:%S"))
@@ -185,44 +159,28 @@ df = load_data()
 # 📑 Pestañas
 # =========================
 tabs = st.tabs([
-    "🕒 Últimas Señales",
     "✅ Señales Enviadas",
     "❌ Descartadas",
     "📈 Resultados Hoy",
     "📊 Histórico",
     "📉 Distribución Probabilidades",
+    "🕒 Últimas Señales",
     "📊 Resumen Global",
     "📈 Gráfico Avanzado"
 ])
 
-# 1) Últimas señales
+# Pestañas de datos (igual que antes)...
 with tabs[0]:
-    st.subheader("🕒 Últimas Señales Registradas")
-    if df.empty:
-        st.warning("⚠️ No hay señales recientes.")
-    else:
-        st.dataframe(df.tail(10), use_container_width=True)
-
-# 2) Señales enviadas
-with tabs[1]:
     st.subheader("✅ Señales enviadas (≥80%)")
     sent = df[df["Estado"].isin(["Pre","Confirmada","Confirmado"])] if not df.empty else pd.DataFrame()
-    if sent.empty:
-        st.warning("⚠️ No hay señales enviadas registradas.")
-    else:
-        st.dataframe(sent, use_container_width=True)
+    st.dataframe(sent, use_container_width=True) if not sent.empty else st.warning("⚠️ No hay señales enviadas registradas.")
 
-# 3) Descartadas
-with tabs[2]:
+with tabs[1]:
     st.subheader("❌ Señales descartadas (<80%)")
     disc = df[df["Estado"].eq("Descartada")] if not df.empty else pd.DataFrame()
-    if disc.empty:
-        st.warning("⚠️ No hay señales descartadas.")
-    else:
-        st.dataframe(disc, use_container_width=True)
+    st.dataframe(disc, use_container_width=True) if not disc.empty else st.warning("⚠️ No hay señales descartadas.")
 
-# 4) Resultados hoy
-with tabs[3]:
+with tabs[2]:
     st.subheader("📈 Resultados de Hoy")
     if df.empty:
         st.warning("⚠️ No hay resultados hoy.")
@@ -236,80 +194,58 @@ with tabs[3]:
             winloss_data = today_df["Resultado"].value_counts()
             fig, ax = plt.subplots()
             winloss_data.reindex(["Win","Loss","-"]).fillna(0).plot(kind="bar", color=["green","red","gray"], ax=ax)
-            ax.set_title("Resultados Win/Loss (Hoy)")
-            ax.set_ylabel("Cantidad")
             st.pyplot(fig)
 
-# 5) Histórico
-with tabs[4]:
+with tabs[3]:
     st.subheader("📊 Histórico Completo")
-    if df.empty:
-        st.warning("⚠️ No hay histórico todavía.")
-    else:
-        st.dataframe(df, use_container_width=True)
+    st.dataframe(df, use_container_width=True) if not df.empty else st.warning("⚠️ No hay histórico todavía.")
 
-# 6) Distribución Probabilidades
-with tabs[5]:
+with tabs[4]:
     st.subheader("📉 Distribución de Probabilidades")
     if df.empty or "ProbFinal" not in df.columns:
         st.warning("⚠️ No hay datos de probabilidades.")
     else:
         fig, ax = plt.subplots()
         pd.to_numeric(df["ProbFinal"], errors="coerce").dropna().hist(bins=20, ax=ax, color="skyblue", edgecolor="black")
-        ax.set_title("Distribución de Probabilidades")
-        ax.set_xlabel("Probabilidad final")
-        ax.set_ylabel("Frecuencia")
         st.pyplot(fig)
 
-# 7) Resumen Global
+with tabs[5]:
+    st.subheader("🕒 Últimas Señales Registradas")
+    st.dataframe(df.tail(10), use_container_width=True) if not df.empty else st.warning("⚠️ No hay señales recientes.")
+
 with tabs[6]:
     st.subheader("📊 Resumen Global de Señales")
     if df.empty:
         st.warning("⚠️ No hay datos aún.")
     else:
-        ticker_counts = df["Ticker"].value_counts()
         result_counts = df["Resultado"].value_counts()
         total_ops = int(result_counts.sum())
         winrate = round((result_counts.get("Win", 0) / total_ops) * 100, 2) if total_ops else 0.0
-
         c1, c2, c3 = st.columns(3)
         c1.metric("Total de señales", len(df))
         c2.metric("Ganadas", int(result_counts.get("Win", 0)))
         c3.metric("Winrate (%)", f"{winrate}%")
-
-        st.subheader("📌 Señales por Ticker")
-        fig1, ax1 = plt.subplots()
-        ticker_counts.plot(kind="bar", color="skyblue", ax=ax1)
-        ax1.set_ylabel("Señales")
-        st.pyplot(fig1)
-
-        st.subheader("🏆 Distribución de Resultados")
-        fig2, ax2 = plt.subplots()
-        ordered = ["Win","Loss","-"]
-        result_counts.reindex(ordered).fillna(0).plot(kind="bar", color=["green","red","gray"], ax=ax2)
-        ax2.set_ylabel("Cantidad")
-        st.pyplot(fig2)
 
 # 8) Gráfico Avanzado
 with tabs[7]:
     st.subheader("📈 Gráfico Avanzado (Velas + Indicadores)")
 
     mercados = {
-        # Futuros CME grandes y micros
-        "S&P 500 Mini (ES/MES)": "ES=F",
-        "Nasdaq 100 Mini (NQ/MNQ)": "NQ=F",
+        "S&P 500 Mini (ES)": "ES=F",
+        "Nasdaq 100 Mini (NQ)": "NQ=F",
         "Dow Jones (YM/MYM)": "YM=F",
         "Russell 2000 (RTY/M2K)": "RTY=F",
-        "Oro (GC/MGC)": "GC=F",
-        "Crudo (CL/MCL)": "CL=F",
-        # Forex
-        "EUR/USD": "EURUSD=X",
-        "GBP/USD": "GBPUSD=X",
-        "USD/JPY": "JPY=X",
-        # Cripto
+        "Oro (GC)": "GC=F",
+        "Plata (SI)": "SI=F",
+        "Crudo WTI (CL)": "CL=F",
+        "Gas Natural (NG)": "NG=F",
+        "Euro FX (6E)": "EURUSD=X",
+        "Libra FX (6B)": "GBPUSD=X",
+        "Yen FX (6J)": "JPY=X",
         "Bitcoin/USD": "BTC-USD",
         "Ethereum/USD": "ETH-USD"
     }
+
     timeframes = {
         "1 minuto": ("1m", "7d"),
         "5 minutos": ("5m", "30d"),
