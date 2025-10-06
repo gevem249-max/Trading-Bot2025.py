@@ -1,4 +1,5 @@
 # bot.py — Trading-Bot completo con Sniper + confirmaciones + auto-resultado SL/TP + error logging
+
 import os
 import json
 import re
@@ -38,7 +39,9 @@ if gs_raw:
 if not SPREADSHEET_ID or not GS_JSON:
     raise RuntimeError("⚠️ Falta SPREADSHEET_ID o GOOGLE_SHEETS_JSON en secrets/env")
 
-CREDS = Credentials.from_service_account_info(GS_JSON, scopes=["https://www.googleapis.com/auth/spreadsheets"])
+CREDS = Credentials.from_service_account_info(
+    GS_JSON, scopes=["https://www.googleapis.com/auth/spreadsheets"]
+)
 GC = gspread.authorize(CREDS)
 SHEET = GC.open_by_key(SPREADSHEET_ID).sheet1
 
@@ -68,8 +71,8 @@ def classify_market(ticker: str) -> str:
 # 📬 Email helpers
 # =========================
 def send_mail_many(subject: str, body: str, to_emails: str):
-    """Envía correo SSL vía Gmail a lista coma-separada"""
-    if not to_emails:
+    """Envía correo SSL vía Gmail a lista coma-separada."""
+    if not to_emails or not GMAIL_USER or not GMAIL_PASS:
         return
     recipients = [e.strip() for e in to_emails.split(",") if e.strip()]
     if not recipients:
@@ -139,7 +142,7 @@ def prob_multi_frame(ticker: str, side: str, weights=None) -> dict:
     return {"per_frame":probs,"final":final}
 
 # =========================
-# 🔎 Sniper helpers: ATR, MACD, candle patterns, SR
+# 🔎 Sniper helpers
 # =========================
 def atr(df, period=14):
     if df is None or df.empty: return 0.0
@@ -172,17 +175,13 @@ def detect_candle_pattern(df):
     range_ = h - l + 1e-9
     lower_wick = min(o,c) - l
     upper_wick = h - max(o,c)
-    if body / range_ < 0.1:
-        return ("doji", -5)
-    if lower_wick > 2 * body and upper_wick < 0.5*body:
-        return ("hammer", 8 if c>o else -8)
+    if body / range_ < 0.1: return ("doji", -5)
+    if lower_wick > 2 * body and upper_wick < 0.5*body: return ("hammer", 8 if c>o else -8)
     if len(df) >= 2:
         o2 = df["Open"].squeeze().iloc[-2]
         c2 = df["Close"].squeeze().iloc[-2]
-        if c > o and c2 < o2 and (c - o) > (o2 - c2):
-            return ("bull_engulf", 12)
-        if c < o and c2 > o2 and (o - c) > (c2 - o2):
-            return ("bear_engulf", -12)
+        if c > o and c2 < o2 and (c - o) > (o2 - c2): return ("bull_engulf", 12)
+        if c < o and c2 > o2 and (o - c) > (c2 - o2): return ("bear_engulf", -12)
     return ("none", 0)
 
 def support_resistance_basic(df, lookback=50):
@@ -212,7 +211,7 @@ def compute_sl_tp(entry, atr_val, side, rr=2.0, atr_multiplier_sl=1.0):
     return (round(sl,6), round(tp,6))
 
 # =========================
-# HEADERS de Google Sheets
+# Google Sheets HEADERS
 # =========================
 HEADERS = [
     "FechaISO","HoraLocal","HoraRegistro","Ticker","Side","Entrada",
@@ -226,16 +225,18 @@ def ensure_headers():
     vals = SHEET.get_all_values()
     if not vals:
         SHEET.append_row(HEADERS)
-    else:
-        current = vals[0]
-        missing = [h for h in HEADERS if h not in current]
-        if missing:
-            new_headers = current + missing
-            SHEET.update("A1", [new_headers])
+        return
+    current = vals[0]
+    # Añadir las que falten al final para no romper columnas existentes
+    missing = [h for h in HEADERS if h not in current]
+    if missing:
+        new_headers = current + missing
+        SHEET.update("A1", [new_headers])
 
 def append_signal(row_dict: dict):
     ensure_headers()
-    row = [row_dict.get(k,"") for k in HEADERS]
+    headers_live = SHEET.row_values(1)
+    row = [row_dict.get(h,"") for h in headers_live]
     SHEET.append_row(row)
 
 def update_row_status_by_index(row_index:int, updates:dict):
@@ -252,8 +253,7 @@ def find_rows(filter_fn):
     out = []
     for i, r in enumerate(records, start=2):
         try:
-            if filter_fn(r):
-                out.append((i, r))
+            if filter_fn(r): out.append((i, r))
         except Exception:
             continue
     return out
@@ -300,7 +300,8 @@ def log_error(exc: Exception, context: str = ""):
 def sniper_score(ticker, side):
     df5 = fetch_yf(ticker, "5m", "5d")
     df15 = fetch_yf(ticker, "15m", "1mo")
-    base = frame_prob(df5, side) if df5 is not None else 50.0
+
+    base = frame_prob(df5, side) if df5 is not None and not df5.empty else 50.0
     pat, pat_score = detect_candle_pattern(df5)
     macd_val = macd_signal(df15)
     macd_score = 8 if (macd_val > 0 and side.lower()=="buy") else (8 if (macd_val < 0 and side.lower()=="sell") else 0)
@@ -310,10 +311,15 @@ def sniper_score(ticker, side):
         if side.lower()=="buy" and ds < 1.0: sr_score += 6
         if side.lower()=="sell" and dr < 1.0: sr_score += 6
     atr_val = atr(df5)
-    final_score = (base*0.5 + ((pat_score/20.0)*100 if pat_score else 0)*0.2 +
-                   ((macd_score/8.0)*100 if macd_score else 0)*0.15 +
-                   ((sr_score/8.0)*100 if sr_score else 0)*0.15)
+
+    final_score = (
+        base*0.5
+        + ( ((pat_score or 0)/20.0)*100 )*0.2
+        + ( ((macd_score or 0)/8.0)*100 )*0.15
+        + ( ((sr_score or 0)/8.0)*100 )*0.15
+    )
     final_score = max(0.0, min(100.0, final_score))
+
     return {
         "score": round(final_score,1),
         "base": round(base,1),
@@ -336,18 +342,24 @@ def process_signal(ticker: str, side: str, entry: float, notify_email: str=None)
         pm = prob_multi_frame(ticker, side)
         p1, p5, p15, p1h = pm["per_frame"]["1m"], pm["per_frame"]["5m"], pm["per_frame"]["15m"], pm["per_frame"]["1h"]
         pf = pm["final"]
+
         sn = sniper_score(ticker, side)
         sniper_val = sn["score"]
         pat = sn["pattern"]; pat_score = sn["pat_score"]
         macd_val = sn["macd_val"]; sr_score = sn["sr_score"]; atr_val = sn["atr"]
+
         sl, tp = compute_sl_tp(entry, atr_val, side)
+
         clasif = "≥80" if pf >= 80 else "<80"
         estado = "Pre" if sniper_val >= 80 else "Descartada"
         tipo = "Pre" if estado=="Pre" else "Backtest"
+
         scheduled_confirm = (t + dt.timedelta(minutes=5)).isoformat() if estado=="Pre" else ""
+
         recipients = ALERT_DEFAULT
         if ticker.upper()=="DKNG" and ALERT_DKNG: recipients = ALERT_DKNG
         elif ticker.upper() in MICRO_TICKERS and ALERT_MICROS: recipients = ALERT_MICROS
+
         row = {
             "FechaISO": t.strftime("%Y-%m-%d"),
             "HoraLocal": t.strftime("%H:%M"),
@@ -376,9 +388,153 @@ def process_signal(ticker: str, side: str, entry: float, notify_email: str=None)
             "Recipients": recipients,
             "ScheduledConfirm": scheduled_confirm
         }
+
         append_signal(row)
         log_debug({**row, "action":"saved"})
+
         if estado == "Pre" and recipients:
             subject = f"📊 Pre-señal {ticker} {side} {entry} – {round(sniper_val,1)}%"
             body = (
-                f"{ticker} {side} @ {
+                f"{ticker} {side} @ {entry}\n"
+                f"Prob final: {pf}% (1m {p1} / 5m {p5} / 15m {p15} / 1h {p1h})\n"
+                f"Sniper: {sniper_val}% | Pattern: {pat} ({pat_score}) | MACD: {macd_val}\n"
+                f"SL: {sl} | TP: {tp}\nConfirmación: {scheduled_confirm}\nMercado: {market}"
+            )
+            send_mail_many(subject, body, recipients)
+
+        return row
+    except Exception as e:
+        log_error(e, context=f"process_signal({ticker},{side},{entry})")
+        raise
+
+# =========================
+# Confirmaciones programadas
+# =========================
+def check_pending_confirmations():
+    try:
+        now = now_et()
+        pending = find_rows(lambda r: r.get("Estado","")=="Pre" and r.get("ScheduledConfirm",""))
+        for idx, r in pending:
+            try:
+                sc = r.get("ScheduledConfirm","")
+                if not sc: continue
+                sc_dt = dt.datetime.fromisoformat(sc).astimezone(TZ)
+                if sc_dt <= now:
+                    ticker = r.get("Ticker")
+                    side = r.get("Side")
+                    pm = prob_multi_frame(ticker, side)
+                    pf2 = pm["final"]
+                    estado2 = "Confirmado" if pf2>=80 else "Cancelado"
+                    update_row_status_by_index(idx, {"Estado": estado2})
+                    log_debug({"row_idx": idx, "old": "Pre", "new": estado2, "ticker": ticker, "pf2": pf2})
+            except Exception as e_inner:
+                log_error(e_inner, context=f"check_pending_confirmations row {idx}")
+    except Exception as e:
+        log_error(e, context="check_pending_confirmations")
+        raise
+
+# =========================
+# Auto-update de resultados SL/TP
+# =========================
+def check_trade_outcomes():
+    try:
+        rows = find_rows(lambda r: r.get("Estado") in ["Pre","Confirmado"] and (r.get("Resultado","") in ["-",""]))
+        for idx,r in rows:
+            try:
+                ticker = r.get("Ticker")
+                side = r.get("Side","Buy").lower()
+                sl = float(r.get("SL") or 0)
+                tp = float(r.get("TP") or 0)
+                df = fetch_yf(ticker,"1m","1d")
+                if df.empty: continue
+                last_price = float(df["Close"].iloc[-1])
+
+                if side=="buy":
+                    if last_price <= sl:
+                        update_row_status_by_index(idx, {"Resultado":"Loss"})
+                    elif last_price >= tp:
+                        update_row_status_by_index(idx, {"Resultado":"Win"})
+                else:
+                    if last_price >= sl:
+                        update_row_status_by_index(idx, {"Resultado":"Loss"})
+                    elif last_price <= tp:
+                        update_row_status_by_index(idx, {"Resultado":"Win"})
+            except Exception as e_inner:
+                log_error(e_inner, context=f"check_trade_outcomes row {idx}")
+    except Exception as e:
+        log_error(e, context="check_trade_outcomes")
+        raise
+
+# =========================
+# Recalibración (simple)
+# =========================
+def recalibrate_weights_from_sheet(n_recent=500, alpha=0.25):
+    try:
+        rows = SHEET.get_all_records()
+        if not rows: return None
+        df = pd.DataFrame(rows).tail(n_recent)
+        if not all(c in df.columns for c in ["ProbFinal","pat_score","macd_val","sr_score","Resultado"]):
+            return None
+        df = df.dropna(subset=["Resultado"])
+        df["y"] = df["Resultado"].apply(lambda x: 1 if str(x).strip().lower()=="win" else 0)
+        if df["y"].sum() == 0: return None
+
+        Xb = (df["ProbFinal"] - df["ProbFinal"].mean()) / (df["ProbFinal"].std()+1e-9)
+        Xp = (df["pat_score"] - df["pat_score"].mean()) / (df["pat_score"].std()+1e-9)
+        Xm = (df["macd_val"] - df["macd_val"].mean()) / (df["macd_val"].std()+1e-9)
+        Xs = (df["sr_score"] - df["sr_score"].mean()) / (df["sr_score"].std()+1e-9)
+
+        cors = {
+            "base": abs(float(Xb.corr(df["y"]) or 0)),
+            "pat":  abs(float(Xp.corr(df["y"]) or 0)),
+            "macd": abs(float(Xm.corr(df["y"]) or 0)),
+            "sr":   abs(float(Xs.corr(df["y"]) or 0)),
+        }
+        s = sum(cors.values()) + 1e-9
+        norm = {k: cors[k]/s for k in cors}
+
+        w_base = 0.6*norm["base"] + 0.4*0.5
+        w_pat  = 0.6*norm["pat"]  + 0.4*0.2
+        w_macd = 0.6*norm["macd"] + 0.4*0.15
+        w_sr   = 0.6*norm["sr"]   + 0.4*0.15
+
+        w_5m = 0.4 + 0.4*(norm["base"])
+        w_1m = 0.15
+        w_15m = 0.25 - 0.1*(norm["base"])
+        w_1h = 0.2 - 0.3*(norm["base"])
+        total_frames = w_1m + w_5m + w_15m + w_1h
+        w_1m /= total_frames; w_5m /= total_frames; w_15m /= total_frames; w_1h /= total_frames
+
+        current = {"1m":0.2,"5m":0.4,"15m":0.25,"1h":0.15,"base":0.5,"pat":0.2,"macd":0.15,"sr":0.15}
+        sm = {
+            "w_1m": round(alpha*w_1m + (1-alpha)*current["1m"], 4),
+            "w_5m": round(alpha*w_5m + (1-alpha)*current["5m"], 4),
+            "w_15m": round(alpha*w_15m + (1-alpha)*current["15m"], 4),
+            "w_1h": round(alpha*w_1h + (1-alpha)*current["1h"], 4),
+            "w_base": round(alpha*w_base + (1-alpha)*current["base"], 4),
+            "w_pat": round(alpha*w_pat + (1-alpha)*current["pat"], 4),
+            "w_macd": round(alpha*w_macd + (1-alpha)*current["macd"], 4),
+            "w_sr": round(alpha*w_sr + (1-alpha)*current["sr"], 4),
+            "ts": now_et().isoformat()
+        }
+
+        # Guardar en hoja meta
+        try:
+            try:
+                ws = GC.open_by_key(SPREADSHEET_ID).worksheet("meta")
+            except gspread.WorksheetNotFound:
+                ws = GC.open_by_key(SPREADSHEET_ID).add_worksheet("meta", rows=100, cols=10)
+                ws.update("A1", [["w_1m","w_5m","w_15m","w_1h","w_base","w_pat","w_macd","w_sr","ts"]])
+            ws.append_row([sm["w_1m"], sm["w_5m"], sm["w_15m"], sm["w_1h"], sm["w_base"], sm["w_pat"], sm["w_macd"], sm["w_sr"], sm["ts"]])
+        except Exception as e:
+            log_error(e, "recalibrate_weights_from_sheet(save_meta)")
+
+        return sm
+    except Exception as e:
+        log_error(e, context="recalibrate_weights_from_sheet")
+        return None
+
+# =========================
+# ▶️ Main (ejemplo)
+# =========================
+def mai
