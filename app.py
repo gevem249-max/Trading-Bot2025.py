@@ -1,4 +1,4 @@
-# app.py — Panel de Señales Trading Bot 2025 (sin errores ArrowTypeError)
+# app.py — Panel de Señales Trading Bot 2025 (recientes arriba)
 
 import os, json, pytz, datetime as dt
 import pandas as pd
@@ -38,7 +38,6 @@ def is_market_open(market: str, t: dt.datetime) -> bool:
         return (9*60 + 30) <= minutes < (16*60)
 
     if market == "cme_micro":
-        # Cierra viernes 17:00, reabre domingo 18:00. Pausa diaria 17:00–18:00.
         if wd == 5: return False
         if wd == 6 and minutes < (18*60): return False
         if wd == 4 and minutes >= (17*60): return False
@@ -57,24 +56,32 @@ def is_market_open(market: str, t: dt.datetime) -> bool:
     return False
 
 # =========================
-# 📄 Datos de Google Sheets (fix ArrowTypeError)
+# 📄 Datos de Google Sheets
 # =========================
 def load_data() -> pd.DataFrame:
     values = SHEET.get_all_records()
     if not values:
         return pd.DataFrame(columns=[
-            "FechaISO","HoraLocal","Ticker","Side","Entrada",
+            "FechaISO","HoraLocal","HoraRegistro","Ticker","Side","Entrada",
             "Prob_1m","Prob_5m","Prob_15m","Prob_1h","ProbFinal",
             "Estado","Resultado","Nota","Mercado"
         ])
     df = pd.DataFrame(values)
 
-    # 🔧 Fix ArrowTypeError: asegurar tipos seguros
+    # 🔧 Normalizar tipos
     for col in df.columns:
         if col.startswith("Prob") or col in ["Entrada"]:
             df[col] = pd.to_numeric(df[col], errors="coerce")
         else:
             df[col] = df[col].astype(str)
+
+    # Ordenar de más reciente a más antiguo (Fecha + HoraRegistro si existen)
+    if "FechaISO" in df.columns and "HoraRegistro" in df.columns:
+        try:
+            df["_ts"] = pd.to_datetime(df["FechaISO"] + " " + df["HoraRegistro"], errors="coerce")
+            df = df.sort_values("_ts", ascending=False).drop(columns=["_ts"])
+        except Exception:
+            pass
 
     return df
 
@@ -83,7 +90,6 @@ def load_data() -> pd.DataFrame:
 # =========================
 st.set_page_config(page_title="Panel de Señales", layout="wide")
 
-# Primera línea: hora local + estado de mercados
 hora_actual = now_et()
 labels = {"equity":"Equities", "cme_micro":"CME Micros", "forex":"Forex", "crypto":"Crypto"}
 st.markdown("### ⏰ Hora local (ET): " + hora_actual.strftime("%Y-%m-%d %H:%M:%S"))
@@ -95,11 +101,9 @@ for i, mkt in enumerate(["equity","cme_micro","forex","crypto"]):
         st.markdown(f"**{labels[mkt]}**")
         st.markdown(f"{icon} **{'Abierto' if opened else 'Cerrado'}**")
 
-# Título y estado del bot
 st.title("🤖 Bot 2025")
 st.success("😊 Bot Activo – corriendo en tiempo real")
 
-# Cargar hoja
 df = load_data()
 
 # =========================
@@ -179,7 +183,7 @@ with tabs[5]:
     if df.empty:
         st.warning("⚠️ No hay señales recientes.")
     else:
-        st.dataframe(df.tail(10), use_container_width=True)
+        st.dataframe(df.head(10), use_container_width=True)  # 👈 head en lugar de tail
 
 # 7) Resumen Global
 with tabs[6]:
