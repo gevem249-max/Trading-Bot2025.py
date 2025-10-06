@@ -1,4 +1,4 @@
-# app.py — Panel de Señales Trading Bot 2025 (completo)
+# app.py — Panel de Señales Trading Bot 2025 (estable con gráfico + indicadores)
 
 import os, json, pytz, datetime as dt
 import pandas as pd
@@ -35,7 +35,7 @@ def is_market_open(market: str, t: dt.datetime) -> bool:
     minutes = h * 60 + m
 
     if market == "equity":
-        if wd >= 5:
+        if wd >= 5:  # fin de semana
             return False
         return (9*60 + 30) <= minutes < (16*60)
 
@@ -152,7 +152,6 @@ for i, mkt in enumerate(["equity","cme_micro","forex","crypto"]):
 
 st.title("🤖 Bot 2025")
 st.success("😊 Bot Activo – corriendo en tiempo real")
-
 df = load_data()
 
 # =========================
@@ -169,83 +168,18 @@ tabs = st.tabs([
     "📈 Gráfico Avanzado"
 ])
 
-# Pestañas de datos (igual que antes)...
-with tabs[0]:
-    st.subheader("✅ Señales enviadas (≥80%)")
-    sent = df[df["Estado"].isin(["Pre","Confirmada","Confirmado"])] if not df.empty else pd.DataFrame()
-    st.dataframe(sent, use_container_width=True) if not sent.empty else st.warning("⚠️ No hay señales enviadas registradas.")
-
-with tabs[1]:
-    st.subheader("❌ Señales descartadas (<80%)")
-    disc = df[df["Estado"].eq("Descartada")] if not df.empty else pd.DataFrame()
-    st.dataframe(disc, use_container_width=True) if not disc.empty else st.warning("⚠️ No hay señales descartadas.")
-
-with tabs[2]:
-    st.subheader("📈 Resultados de Hoy")
-    if df.empty:
-        st.warning("⚠️ No hay resultados hoy.")
-    else:
-        today = hora_actual.strftime("%Y-%m-%d")
-        today_df = df[df["FechaISO"].eq(today)]
-        if today_df.empty:
-            st.warning("⚠️ No hay resultados hoy.")
-        else:
-            st.dataframe(today_df, use_container_width=True)
-            winloss_data = today_df["Resultado"].value_counts()
-            fig, ax = plt.subplots()
-            winloss_data.reindex(["Win","Loss","-"]).fillna(0).plot(kind="bar", color=["green","red","gray"], ax=ax)
-            st.pyplot(fig)
-
-with tabs[3]:
-    st.subheader("📊 Histórico Completo")
-    st.dataframe(df, use_container_width=True) if not df.empty else st.warning("⚠️ No hay histórico todavía.")
-
-with tabs[4]:
-    st.subheader("📉 Distribución de Probabilidades")
-    if df.empty or "ProbFinal" not in df.columns:
-        st.warning("⚠️ No hay datos de probabilidades.")
-    else:
-        fig, ax = plt.subplots()
-        pd.to_numeric(df["ProbFinal"], errors="coerce").dropna().hist(bins=20, ax=ax, color="skyblue", edgecolor="black")
-        st.pyplot(fig)
-
-with tabs[5]:
-    st.subheader("🕒 Últimas Señales Registradas")
-    st.dataframe(df.tail(10), use_container_width=True) if not df.empty else st.warning("⚠️ No hay señales recientes.")
-
-with tabs[6]:
-    st.subheader("📊 Resumen Global de Señales")
-    if df.empty:
-        st.warning("⚠️ No hay datos aún.")
-    else:
-        result_counts = df["Resultado"].value_counts()
-        total_ops = int(result_counts.sum())
-        winrate = round((result_counts.get("Win", 0) / total_ops) * 100, 2) if total_ops else 0.0
-        c1, c2, c3 = st.columns(3)
-        c1.metric("Total de señales", len(df))
-        c2.metric("Ganadas", int(result_counts.get("Win", 0)))
-        c3.metric("Winrate (%)", f"{winrate}%")
-
-# 8) Gráfico Avanzado
 with tabs[7]:
     st.subheader("📈 Gráfico Avanzado (Velas + Indicadores)")
-
     mercados = {
         "S&P 500 Mini (ES)": "ES=F",
         "Nasdaq 100 Mini (NQ)": "NQ=F",
         "Dow Jones (YM/MYM)": "YM=F",
         "Russell 2000 (RTY/M2K)": "RTY=F",
         "Oro (GC)": "GC=F",
-        "Plata (SI)": "SI=F",
-        "Crudo WTI (CL)": "CL=F",
-        "Gas Natural (NG)": "NG=F",
-        "Euro FX (6E)": "EURUSD=X",
-        "Libra FX (6B)": "GBPUSD=X",
-        "Yen FX (6J)": "JPY=X",
+        "Crudo (CL)": "CL=F",
+        "EUR/USD": "EURUSD=X",
         "Bitcoin/USD": "BTC-USD",
-        "Ethereum/USD": "ETH-USD"
     }
-
     timeframes = {
         "1 minuto": ("1m", "7d"),
         "5 minutos": ("5m", "30d"),
@@ -253,13 +187,10 @@ with tabs[7]:
         "1 hora": ("1h", "730d"),
         "1 día": ("1d", "5y"),
     }
-
     mercado_sel = st.selectbox("Selecciona mercado:", list(mercados.keys()))
     timeframe_sel = st.selectbox("Selecciona timeframe:", list(timeframes.keys()))
-
     yf_ticker = mercados[mercado_sel]
     interval, period = timeframes[timeframe_sel]
-
     try:
         base = fetch_yf_clean(yf_ticker, interval, period)
         if base.empty:
