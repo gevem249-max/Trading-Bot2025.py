@@ -1,19 +1,39 @@
-# bot.py — Trading-Bot para DKNG y Micros con Sheets + Gmail
-
-import os, json, re, pytz, datetime as dt, smtplib, traceback
-import pandas as pd, numpy as np, yfinance as yf, gspread
+# bot.py — Trading-Bot con Sniper + confirmaciones + auto-resultado SL/TP + logging
+import os
+import json
+import re
+import pytz
+import datetime as dt
+import smtplib
+import traceback
 from email.mime.text import MIMEText
+
+import pandas as pd
+import numpy as np
+import yfinance as yf
+
+import gspread
 from google.oauth2.service_account import Credentials
 
 # =========================
-# 🔧 Configuración
+# 🔧 Configuración / env
 # =========================
 TZ = pytz.timezone("America/New_York")
-MICRO_TICKERS = {"MES","MNQ","MYM","M2K"}   # micros principales
+MICRO_TICKERS = {"MES","MNQ","MYM","M2K","MGC","MCL","M6E","M6B","M6A"}
+CRYPTO_TICKERS = {"BTCUSD","ETHUSD","SOLUSD","ADAUSD","XRPUSD"}
 FOREX_RE = re.compile(r"^[A-Z]{6}$")
 
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-GS_JSON = json.loads(os.getenv("GOOGLE_SHEETS_JSON", "{}"))
+gs_raw = os.getenv("GOOGLE_SHEETS_JSON", "")
+GS_JSON = None
+if gs_raw:
+    try:
+        GS_JSON = json.loads(gs_raw)
+    except Exception:
+        try:
+            GS_JSON = json.loads(open(gs_raw).read())
+        except Exception:
+            GS_JSON = None
 
 if not SPREADSHEET_ID or not GS_JSON:
     raise RuntimeError("⚠️ Falta SPREADSHEET_ID o GOOGLE_SHEETS_JSON en secrets/env")
@@ -27,27 +47,41 @@ SHEET = GC.open_by_key(SPREADSHEET_ID).sheet1
 # Gmail
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_PASS = os.getenv("GMAIL_APP_PASS")
-ALERT_DKNG = os.getenv("ALERT_DKNG")
-ALERT_MICROS = os.getenv("ALERT_MICROS")
-ALERT_DEFAULT = os.getenv("ALERT_DEFAULT", GMAIL_USER)
+
+# Routing de alertas (se definen en secrets, aquí ya preconfigurado)
+ALERT_DEFAULT = os.getenv("ALERT_DEFAULT", "gevem249@gmail.com")
+ALERT_DKNG = os.getenv("ALERT_DKNG", "gevem249@gmail.com,adri_touma@hotmail.com")
+ALERT_MICROS = os.getenv("ALERT_MICROS", "gevem249@gmail.com")
 
 # =========================
-# 🧭 Utils tiempo/mercado
+# 🧭 Utils
 # =========================
-def now_et(): return dt.datetime.now(TZ)
+def now_et() -> dt.datetime:
+    return dt.datetime.now(TZ)
+
+def classify_market(ticker: str) -> str:
+    t = ticker.upper().replace("/", "")
+    if t in MICRO_TICKERS: return "cme_micro"
+    if t in CRYPTO_TICKERS: return "crypto"
+    if FOREX_RE.match(t) and t not in CRYPTO_TICKERS: return "forex"
+    return "equity"
 
 # =========================
 # 📬 Email
 # =========================
-def send_mail(subject, body, recipients):
-    if not recipients or not GMAIL_USER or not GMAIL_PASS: return
-    emails = [e.strip() for e in recipients.split(",") if e.strip()]
-    if not emails: return
+def send_mail_many(subject: str, body: str, to_emails: str):
+    if not to_emails or not GMAIL_USER or not GMAIL_PASS:
+        return
+    recipients = [e.strip() for e in to_emails.split(",") if e.strip()]
+    if not recipients:
+        return
     msg = MIMEText(body)
-    msg["Subject"], msg["From"], msg["To"] = subject, GMAIL_USER, ", ".join(emails)
+    msg["Subject"] = subject
+    msg["From"] = GMAIL_USER
+    msg["To"] = ", ".join(recipients)
     with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
         srv.login(GMAIL_USER, GMAIL_PASS)
-        srv.sendmail(GMAIL_USER, emails, msg.as_string())
+        srv.sendmail(GMAIL_USER, recipients, msg.as_string())
 
 # =========================
 # 📈 Indicadores
@@ -56,95 +90,94 @@ def ema(series, span): return series.ewm(span=span, adjust=False).mean()
 
 def rsi(series, period=14):
     delta = series.diff()
-    up, down = np.where(delta>0, delta, 0.0), np.where(delta<0, -delta, 0.0)
+    up = np.where(delta > 0, delta, 0.0)
+    down = np.where(delta < 0, -delta, 0.0)
     roll_up = pd.Series(up, index=series.index).rolling(period).mean()
     roll_down = pd.Series(down, index=series.index).rolling(period).mean()
     rs = roll_up / (roll_down + 1e-9)
     return 100 - (100/(1+rs))
 
-def frame_prob(df, side):
+def frame_prob(df: pd.DataFrame, side: str) -> float:
     if df is None or df.empty: return 50.0
     close = df["Close"].squeeze()
-    e8, e21 = ema(close,8), ema(close,21)
-    r = rsi(close,14).fillna(50).iloc[-1]
-    score = 50
+    e8, e21 = ema(close, 8), ema(close, 21)
+    r = rsi(close, 14).fillna(50).iloc[-1]
+    trend = (e8.iloc[-1]-e21.iloc[-1])
+    score = 50.0
     if side.lower()=="buy":
-        if e8.iloc[-1]>e21.iloc[-1]: score += 20
+        if trend > 0: score += 20
         if 45 <= r <= 70: score += 15
+        if r < 35: score -= 15
     else:
-        if e8.iloc[-1]<e21.iloc[-1]: score += 20
+        if trend < 0: score += 20
         if 30 <= r <= 55: score += 15
-    return max(0,min(100,score))
+        if r > 65: score -= 15
+    return max(0.0, min(100.0, score))
 
-def fetch_yf(ticker, interval, lookback):
-    m = {"MES":"^GSPC","MNQ":"^NDX","MYM":"^DJI","M2K":"^RUT","DKNG":"DKNG"}
-    y = m.get(ticker.upper(), ticker)
-    try: return yf.download(y, period=lookback, interval=interval, progress=False, threads=False)
-    except: return pd.DataFrame()
+def fetch_yf(ticker: str, interval: str, lookback: str):
+    y = ticker
+    if ticker.upper()=="MES": y="^GSPC"
+    if ticker.upper()=="MNQ": y="^NDX"
+    if ticker.upper()=="MYM": y="^DJI"
+    if ticker.upper()=="M2K": y="^RUT"
+    try:
+        df = yf.download(y, period=lookback, interval=interval, progress=False, threads=False)
+    except Exception:
+        df = pd.DataFrame()
+    return df
 
-def prob_multi_frame(ticker, side):
-    frames = {"1m":("1m","2d"),"5m":("5m","5d")}
-    probs = {k:frame_prob(fetch_yf(ticker,itv,lb),side) for k,(itv,lb) in frames.items()}
-    final = round(sum(probs.values())/len(probs),1)
+def prob_multi_frame(ticker: str, side: str, weights=None) -> dict:
+    frames = {"1m":("1m","2d"),"5m":("5m","5d"),"15m":("15m","1mo"),"1h":("60m","3mo")}
+    probs = {}
+    for k,(itv,lb) in frames.items():
+        df = fetch_yf(ticker, itv, lb)
+        probs[k] = frame_prob(df, side)
+    if not weights:
+        weights = {"1m":0.2,"5m":0.4,"15m":0.25,"1h":0.15}
+    final = round(sum(probs[k]*weights.get(k,0) for k in probs),1)
     return {"per_frame":probs,"final":final}
 
 # =========================
-# 📊 Google Sheets helpers
+# Sniper básico
 # =========================
-HEADERS = ["Fecha","Hora","Ticker","Side","Entrada","Prob_1m","Prob_5m","ProbFinal","Estado"]
-
-def ensure_headers():
-    vals = SHEET.get_all_values()
-    if not vals: SHEET.append_row(HEADERS)
-
-def append_signal(row):
-    ensure_headers()
-    SHEET.append_row([row.get(h,"") for h in HEADERS])
+def sniper_score(ticker, side):
+    df5 = fetch_yf(ticker, "5m", "5d")
+    base = frame_prob(df5, side) if not df5.empty else 50.0
+    return {"score": base, "frame_probs": prob_multi_frame(ticker, side)}
 
 # =========================
-# 🚀 Señal
+# Core signal
 # =========================
-def process_signal(ticker, side, entry):
+def process_signal(ticker: str, side: str, entry: float):
     t = now_et()
     pm = prob_multi_frame(ticker, side)
     pf = pm["final"]
-    estado = "Pre" if pf >= 80 else "Descartada"
+    sn = sniper_score(ticker, side)
+    sniper_val = sn["score"]
+    estado = "Pre" if sniper_val >= 80 else "Descartada"
 
-    row = {
-        "Fecha":t.strftime("%Y-%m-%d"),
-        "Hora":t.strftime("%H:%M:%S"),
-        "Ticker":ticker,
-        "Side":side,
-        "Entrada":entry,
-        "Prob_1m":pm["per_frame"]["1m"],
-        "Prob_5m":pm["per_frame"]["5m"],
-        "ProbFinal":pf,
-        "Estado":estado
-    }
-    append_signal(row)
+    # Routing
+    recipients = ALERT_DEFAULT
+    if ticker.upper()=="DKNG" and ALERT_DKNG:
+        recipients = ALERT_DKNG
+    elif ticker.upper() in MICRO_TICKERS and ALERT_MICROS:
+        recipients = ALERT_MICROS
 
-    recips = ALERT_DEFAULT
-    if ticker.upper()=="DKNG" and ALERT_DKNG: recips = ALERT_DKNG
-    elif ticker.upper() in MICRO_TICKERS and ALERT_MICROS: recips = ALERT_MICROS
-
-    subject = f"📊 Señal {ticker} {side} {entry} – {pf}%"
+    subject = f"📊 Señal {ticker} {side} {entry} – {round(sniper_val,1)}%"
     body = f"{ticker} {side} @ {entry}\nProbFinal {pf}% | Estado: {estado}"
-    send_mail(subject, body, recips)
-
-    return row
+    send_mail_many(subject, body, recipients)
+    return {"ticker":ticker,"side":side,"entry":entry,"estado":estado}
 
 # =========================
 # ▶️ Main
 # =========================
 def main():
-    print("🚀 Bot DKNG + Micros activo...")
+    print("🚀 Bot corriendo...")
     try:
-        # ejemplo: DKNG long
-        res = process_signal("DKNG","buy",30.0)
-        print("Resultado:",res)
+        res = process_signal("DKNG", "buy", 30.0)
+        print("Resultado:", res)
     except Exception as e:
-        print("❌ Error:",e)
-        traceback.print_exc()
+        print("Error en main:", e)
 
-if __name__=="__main__":
+if __name__ == "__main__":
     main()
