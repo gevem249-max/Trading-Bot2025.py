@@ -2,17 +2,8 @@ name: Run Trading Bot
 
 on:
   schedule:
-    # 📈 Regular Market Hours (09:30–16:00 ET = 13:30–20:00 UTC, lun-vie)
-    - cron: "*/15 13-20 * * 1-5"
-
-    # 🌙 Globex Session (18:00–21:00 ET = 22:00–01:00 UTC, lun-vie)
-    - cron: "*/15 22-23 * * 0-4"  # Domingo–Jueves 22:00–23:59 UTC
-    - cron: "*/15 0-1 * * 1-5"    # Lunes–Viernes 00:00–01:59 UTC
-
-    # 🌙 Globex Continuación (01:00–17:00 ET = 05:00–21:00 UTC, lun-vie)
-    - cron: "*/15 5-20 * * 1-5"
-
-  workflow_dispatch:   # ▶️ Permite ejecutarlo manualmente
+    - cron: "0,15,30,45 13-21 * * 1-5"   # cada 15 minutos entre 9am y 5pm NY (13-21 UTC)
+  workflow_dispatch:
 
 jobs:
   run-bot:
@@ -38,8 +29,8 @@ jobs:
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+          ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
           ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
           ALERT_MICROS: ${{ secrets.ALERT_MICROS }}
-          ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
         run: |
           python bot.py
