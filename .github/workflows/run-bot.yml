@@ -2,10 +2,7 @@ name: Run Trading Bot
 
 on:
   schedule:
-    # 🕘 Cada 5 minutos durante horas de mercado (lunes a viernes)
-    - cron: "*/5 13-20 * * 1-5"
-    # 🌙 Cada hora fuera del horario de mercado (modo ligero)
-    - cron: "0 0-12,21-23 * * *"
+    - cron: "*/5 * * * *"   # cada 5 minutos (UTC). El bot maneja horario/mercados internamente
   workflow_dispatch:
 
 jobs:
@@ -25,19 +22,11 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run Trading Bot
+      - name: Run bot
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-          ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
-          ALERT_ES: ${{ secrets.ALERT_ES }}
         run: |
-          echo "🚀 Ejecutando bot.py (intervalo dinámico)"
           python bot.py
-
-      - name: Cleanup old logs (7-day retention)
-        run: |
-          echo "🧹 Limpiando logs antiguos"
-          find . -name "*.log" -type f -mtime +7 -delete
