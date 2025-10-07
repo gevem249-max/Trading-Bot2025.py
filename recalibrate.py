@@ -1,5 +1,5 @@
 # recalibrate.py — script independiente para recalibración de pesos
-import os, json, datetime as dt
+import os, json, datetime as dt, math
 import pandas as pd
 import numpy as np
 import gspread
@@ -80,6 +80,10 @@ def recalibrate():
     avg_win_prob = df[df["Resultado"]=="Win"]["ProbFinal"].mean()
     avg_loss_prob = df[df["Resultado"]=="Loss"]["ProbFinal"].mean()
 
+    if avg_win_prob is None or math.isnan(avg_win_prob):
+        print("⚠️ No se pudo calcular promedio de ProbFinal para Wins.")
+        avg_win_prob = 75.0  # valor seguro por defecto
+
     # Sniper rate básico
     sniper_hits, sniper_miss = 0, 0
     for tkr in df["Ticker"].unique():
@@ -87,7 +91,6 @@ def recalibrate():
             data = yf.download(map_ticker_yf(tkr), period="5d", interval="5m", progress=False)
             if data.empty: 
                 continue
-
             close = data["Close"]
             e8, e21 = ema(close, 8), ema(close, 21)
             r = rsi(close).iloc[-1]
@@ -98,10 +101,8 @@ def recalibrate():
                 (r > 50) and
                 (macd_line.iloc[-1] > signal_line.iloc[-1])
             )
-            if sniper_ok:
-                sniper_hits += 1
-            else:
-                sniper_miss += 1
+            if sniper_ok: sniper_hits += 1
+            else: sniper_miss += 1
         except Exception as e:
             print(f"⚠️ Error analizando {tkr}: {e}")
 
