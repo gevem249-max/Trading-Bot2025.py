@@ -2,7 +2,8 @@ name: Run Trading Bot
 
 on:
   schedule:
-    - cron: "0,15,30,45 13-21 * * 1-5"   # cada 15 minutos entre 9am y 5pm NY (13-21 UTC)
+    # Ejecutar cada 10 minutos entre 9:00 y 16:00 hora de Nueva York
+    - cron: "*/10 13-20 * * 1-5"  # UTC equivale a 9am–4pm NY, lunes a viernes
   workflow_dispatch:
 
 jobs:
@@ -29,8 +30,6 @@ jobs:
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-          ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
-          ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
-          ALERT_MICROS: ${{ secrets.ALERT_MICROS }}
         run: |
+          echo "🚀 Ejecutando bot de mercado (9am–4pm ET)"
           python bot.py
