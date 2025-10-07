@@ -1,8 +1,9 @@
-name: Update Results
+name: Update Trade Results
 
 on:
   schedule:
-    - cron: "0 * * * *"   # cada hora
+    # 🕒 Cada 5 minutos — sincronizado con run-bot.yml
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
@@ -20,11 +21,19 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt yfinance
+          pip install -r requirements.txt
 
-      - name: Run update_results.py
+      - name: Run results updater
         env:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
+          GMAIL_USER: ${{ secrets.GMAIL_USER }}
+          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
         run: |
+          echo "📈 Verificando confirmaciones y resultados..."
           python update_results.py
+
+      - name: Cleanup old logs (7-day retention)
+        run: |
+          echo "🧹 Limpiando logs antiguos"
+          find . -name "*.log" -type f -mtime +7 -delete
