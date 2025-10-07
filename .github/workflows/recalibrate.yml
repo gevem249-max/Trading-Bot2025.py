@@ -2,13 +2,12 @@ name: Recalibrate Bot
 
 on:
   schedule:
-    - cron: "0 */6 * * *"   # cada 6 horas
+    - cron: "0 */6 * * *"
   workflow_dispatch:
 
 jobs:
   recalibrate:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -28,5 +27,5 @@ jobs:
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
         run: |
-          echo "🚀 Ejecutando recalibrate.py"
+          echo "🔧 Recalibrando pesos con recalibrate.py"
           python recalibrate.py
