@@ -1,4 +1,4 @@
-# bot.py — Trading-Bot con Sniper + confirmaciones + auto-resultado SL/TP + logging
+# bot.py — Trading-Bot con señales por correo + registro en Google Sheets
 import os
 import json
 import re
@@ -19,10 +19,13 @@ from google.oauth2.service_account import Credentials
 # 🔧 Configuración / env
 # =========================
 TZ = pytz.timezone("America/New_York")
+
+# Conjuntos para clasificar mercados
 MICRO_TICKERS = {"MES","MNQ","MYM","M2K","MGC","MCL","M6E","M6B","M6A"}
 CRYPTO_TICKERS = {"BTCUSD","ETHUSD","SOLUSD","ADAUSD","XRPUSD"}
 FOREX_RE = re.compile(r"^[A-Z]{6}$")
 
+# Google Sheets
 SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
 gs_raw = os.getenv("GOOGLE_SHEETS_JSON", "")
 GS_JSON = None
@@ -31,6 +34,7 @@ if gs_raw:
         GS_JSON = json.loads(gs_raw)
     except Exception:
         try:
+            # Si en dev pasaste una ruta al archivo JSON
             GS_JSON = json.loads(open(gs_raw).read())
         except Exception:
             GS_JSON = None
@@ -48,10 +52,10 @@ SHEET = GC.open_by_key(SPREADSHEET_ID).sheet1
 GMAIL_USER = os.getenv("GMAIL_USER")
 GMAIL_PASS = os.getenv("GMAIL_APP_PASS")
 
-# Routing de alertas (se definen en secrets, aquí ya preconfigurado)
+# Routing de alertas (por defecto como pediste)
 ALERT_DEFAULT = os.getenv("ALERT_DEFAULT", "gevem249@gmail.com")
-ALERT_DKNG = os.getenv("ALERT_DKNG", "gevem249@gmail.com,adri_touma@hotmail.com")
-ALERT_MICROS = os.getenv("ALERT_MICROS", "gevem249@gmail.com")
+ALERT_DKNG    = os.getenv("ALERT_DKNG", "gevem249@gmail.com,adri_touma@hotmail.com")
+ALERT_MICROS  = os.getenv("ALERT_MICROS", "gevem249@gmail.com")   # micros -> tú
 
 # =========================
 # 🧭 Utils
@@ -84,9 +88,10 @@ def send_mail_many(subject: str, body: str, to_emails: str):
         srv.sendmail(GMAIL_USER, recipients, msg.as_string())
 
 # =========================
-# 📈 Indicadores
+# 📈 Indicadores básicos
 # =========================
-def ema(series, span): return series.ewm(span=span, adjust=False).mean()
+def ema(series, span): 
+    return series.ewm(span=span, adjust=False).mean()
 
 def rsi(series, period=14):
     delta = series.diff()
@@ -98,11 +103,13 @@ def rsi(series, period=14):
     return 100 - (100/(1+rs))
 
 def frame_prob(df: pd.DataFrame, side: str) -> float:
-    if df is None or df.empty: return 50.0
+    """Heurística simple con EMAs y RSI."""
+    if df is None or df.empty: 
+        return 50.0
     close = df["Close"].squeeze()
-    e8, e21 = ema(close, 8), ema(close, 21)
+    e13, e21 = ema(close, 13), ema(close, 21)
     r = rsi(close, 14).fillna(50).iloc[-1]
-    trend = (e8.iloc[-1]-e21.iloc[-1])
+    trend = (e13.iloc[-1]-e21.iloc[-1])
     score = 50.0
     if side.lower()=="buy":
         if trend > 0: score += 20
@@ -112,14 +119,23 @@ def frame_prob(df: pd.DataFrame, side: str) -> float:
         if trend < 0: score += 20
         if 30 <= r <= 55: score += 15
         if r > 65: score -= 15
-    return max(0.0, min(100.0, score))
+    return float(max(0.0, min(100.0, score)))
+
+# =========================
+# 📥 Datos de mercado (yfinance)
+# =========================
+def _map_micro_to_index(ticker: str) -> str:
+    """Mapea algunos micros a índices de Yahoo para demo."""
+    t = ticker.upper()
+    return {
+        "MES": "^GSPC",
+        "MNQ": "^NDX",
+        "MYM": "^DJI",
+        "M2K": "^RUT",
+    }.get(t, ticker)
 
 def fetch_yf(ticker: str, interval: str, lookback: str):
-    y = ticker
-    if ticker.upper()=="MES": y="^GSPC"
-    if ticker.upper()=="MNQ": y="^NDX"
-    if ticker.upper()=="MYM": y="^DJI"
-    if ticker.upper()=="M2K": y="^RUT"
+    y = _map_micro_to_index(ticker)
     try:
         df = yf.download(y, period=lookback, interval=interval, progress=False, threads=False)
     except Exception:
@@ -138,46 +154,130 @@ def prob_multi_frame(ticker: str, side: str, weights=None) -> dict:
     return {"per_frame":probs,"final":final}
 
 # =========================
-# Sniper básico
+# 🧮 Sniper (muy simple, usa 5m)
 # =========================
 def sniper_score(ticker, side):
     df5 = fetch_yf(ticker, "5m", "5d")
-    base = frame_prob(df5, side) if not df5.empty else 50.0
+    base = frame_prob(df5, side) if df5 is not None and not df5.empty else 50.0
     return {"score": base, "frame_probs": prob_multi_frame(ticker, side)}
 
 # =========================
-# Core signal
+# 📄 Google Sheets helpers
+# =========================
+HEADERS = [
+    "FechaISO","HoraLocal","HoraRegistro","Ticker","Side","Entrada",
+    "Prob_1m","Prob_5m","Prob_15m","Prob_1h","ProbFinal",
+    "Estado","Resultado","Nota","Mercado","Recipients"
+]
+
+def ensure_headers():
+    vals = SHEET.get_all_values()
+    if not vals:
+        SHEET.append_row(HEADERS)
+        return
+    current = vals[0]
+    missing = [h for h in HEADERS if h not in current]
+    if missing:
+        new_headers = current + missing
+        SHEET.update("A1", [new_headers])
+
+def append_signal_row(row_dict: dict):
+    ensure_headers()
+    headers_live = SHEET.row_values(1)
+    row = [row_dict.get(h, "") for h in headers_live]
+    SHEET.append_row(row)
+
+# =========================
+# 🚦 Core: generar y notificar señal
 # =========================
 def process_signal(ticker: str, side: str, entry: float):
     t = now_et()
+    market = classify_market(ticker)
+
+    # Probabilidades por timeframe
     pm = prob_multi_frame(ticker, side)
-    pf = pm["final"]
+    p1  = pm["per_frame"]["1m"]
+    p5  = pm["per_frame"]["5m"]
+    p15 = pm["per_frame"]["15m"]
+    p1h = pm["per_frame"]["1h"]
+    pf  = pm["final"]
+
+    # Sniper simple (usa 5m)
     sn = sniper_score(ticker, side)
     sniper_val = sn["score"]
+
     estado = "Pre" if sniper_val >= 80 else "Descartada"
 
-    # Routing
-    recipients = ALERT_DEFAULT
-    if ticker.upper()=="DKNG" and ALERT_DKNG:
-        recipients = ALERT_DKNG
-    elif ticker.upper() in MICRO_TICKERS and ALERT_MICROS:
-        recipients = ALERT_MICROS
+    # Routing de emails
+    tkr = ticker.upper()
+    if tkr == "DKNG":
+        recipients = ALERT_DKNG                      # tú + Adri
+    elif tkr in MICRO_TICKERS:
+        recipients = ALERT_MICROS                    # micros -> tú
+    else:
+        recipients = ALERT_DEFAULT                   # todos los demás -> tú
 
+    # Guarda en Google Sheets
+    try:
+        row = {
+            "FechaISO": t.strftime("%Y-%m-%d"),
+            "HoraLocal": t.strftime("%H:%M"),
+            "HoraRegistro": t.strftime("%H:%M:%S"),
+            "Ticker": tkr,
+            "Side": side.title(),
+            "Entrada": entry,
+            "Prob_1m": round(p1,1),
+            "Prob_5m": round(p5,1),
+            "Prob_15m": round(p15,1),
+            "Prob_1h": round(p1h,1),
+            "ProbFinal": round(pf,1),
+            "Estado": estado,
+            "Resultado": "-",
+            "Nota": f"sniper:{round(sniper_val,1)}",
+            "Mercado": market,
+            "Recipients": recipients,
+        }
+        append_signal_row(row)
+    except Exception as e:
+        # No romper el envío si falla el sheet
+        try:
+            dbg = GC.open_by_key(SPREADSHEET_ID).worksheet("debug")
+        except gspread.WorksheetNotFound:
+            dbg = GC.open_by_key(SPREADSHEET_ID).add_worksheet("debug", rows=2000, cols=10)
+            dbg.update("A1", [["ts","error","ctx"]])
+        dbg.append_row([t.isoformat(), str(e), f"append_signal_row {ticker}"])
+
+    # Email
     subject = f"📊 Señal {ticker} {side} {entry} – {round(sniper_val,1)}%"
-    body = f"{ticker} {side} @ {entry}\nProbFinal {pf}% | Estado: {estado}"
+    body = (
+        f"{ticker} {side} @ {entry}\n"
+        f"ProbFinal: {pf}% (1m {p1} / 5m {p5} / 15m {p15} / 1h {p1h})\n"
+        f"Estado: {estado} | Mercado: {market}\n"
+        f"Destinatarios: {recipients}"
+    )
     send_mail_many(subject, body, recipients)
-    return {"ticker":ticker,"side":side,"entry":entry,"estado":estado}
+
+    return {"ticker":ticker,"side":side,"entry":entry,"estado":estado,"recipients":recipients}
 
 # =========================
-# ▶️ Main
+# ▶️ Main (demo)
 # =========================
 def main():
     print("🚀 Bot corriendo...")
     try:
+        # DEMO: dispara una señal de DKNG para ver correo + registro en Sheet
         res = process_signal("DKNG", "buy", 30.0)
         print("Resultado:", res)
     except Exception as e:
         print("Error en main:", e)
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__))
+        # intenta log a debug
+        try:
+            dbg = GC.open_by_key(SPREADSHEET_ID).worksheet("debug")
+        except gspread.WorksheetNotFound:
+            dbg = GC.open_by_key(SPREADSHEET_ID).add_worksheet("debug", rows=2000, cols=10)
+            dbg.update("A1", [["ts","error","trace"]])
+        dbg.append_row([now_et().isoformat(), str(e), tb[:1800]])
 
 if __name__ == "__main__":
     main()
