@@ -1,23 +1,14 @@
 # Core
-streamlit==1.37.0
-
-# Data & Finance
 pandas==2.2.2
 numpy==1.26.4
+pytz==2024.1
+
+# Finanzas
 yfinance==0.2.38
-mplfinance==0.12.10b0
 
 # Google Sheets
 gspread==6.1.2
 google-auth==2.29.0
-google-auth-oauthlib==1.2.0
-google-auth-httplib2==0.2.0
 
-# Plotting
-matplotlib==3.8.4
-
-# Para evitar ArrowTypeError en Streamlit (usar versión estable)
-pyarrow==13.0.0
-
-# Otros
-pytz==2024.1
+# Email y Requests
+requests==2.32.3
