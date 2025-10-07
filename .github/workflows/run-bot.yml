@@ -2,20 +2,19 @@ name: Run Trading Bot
 
 on:
   schedule:
-    - cron: "*/2 * * * *"        # cada 2 minutos, 24/7
+    - cron: "*/5 * * * *"   # cada 5 minutos
   workflow_dispatch:
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 6
 
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@v3
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v4
         with:
           python-version: "3.10"
 
@@ -24,20 +23,16 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: Run bot (full-scan)
+      - name: Run bot
         env:
+          TZ: "America/New_York"
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
           GMAIL_USER: ${{ secrets.GMAIL_USER }}
           GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
-          ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
           ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
           ALERT_ES: ${{ secrets.ALERT_ES }}
-          # parámetros del modo full-scan
-          PRE_THRESHOLD: "80"
-          CONFIRM_THRESHOLD: "80"
-          CONFIRM_WAIT_MIN: "5"
-          CYCLES: "3"             # 3 sub-ciclos por cada run
-          SLEEP_SECONDS: "60"     # 1 minuto entre sub-ciclos
+          ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
         run: |
+          echo "🚀 Ejecutando bot.py"
           python bot.py
