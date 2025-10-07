@@ -1,4 +1,4 @@
-# update_results.py — Actualiza señales, resultados y registra estado del mercado (completo y automático)
+# update_results.py — Actualiza señales, resultados, registra estado del mercado y envía correos (versión completa)
 
 import os
 import json
@@ -7,10 +7,12 @@ import pytz
 import pandas as pd
 import yfinance as yf
 import gspread
+import smtplib
+from email.mime.text import MIMEText
 from google.oauth2.service_account import Credentials
 
 # =========================
-# ⚙️ Configuración general
+# ⚙️ Configuración
 # =========================
 TZ = pytz.timezone("America/New_York")
 
@@ -22,25 +24,28 @@ CREDS = Credentials.from_service_account_info(
 )
 GC = gspread.authorize(CREDS)
 
-# === Hojas ===
+# Hojas
 SHEET_SIGNALS = GC.open_by_key(SPREADSHEET_ID).worksheet("signals")
 
-# Logs
 try:
     SHEET_LOG = GC.open_by_key(SPREADSHEET_ID).worksheet("logs")
 except gspread.WorksheetNotFound:
     SHEET_LOG = GC.open_by_key(SPREADSHEET_ID).add_worksheet("logs", rows=1000, cols=10)
     SHEET_LOG.update("A1", [["Timestamp", "Action", "Ticker", "Side", "Old", "New", "Note"]])
 
-# Estado del mercado
 try:
     SHEET_MARKET = GC.open_by_key(SPREADSHEET_ID).worksheet("market_status")
 except gspread.WorksheetNotFound:
     SHEET_MARKET = GC.open_by_key(SPREADSHEET_ID).add_worksheet("market_status", rows=200, cols=5)
     SHEET_MARKET.update("A1:E1", [["FechaISO", "HoraApertura", "HoraCierre", "TiempoActivo", "Estado"]])
 
+# Gmail config
+GMAIL_USER = os.getenv("GMAIL_USER")
+GMAIL_PASS = os.getenv("GMAIL_APP_PASS")
+ALERT_EMAIL = "gevem249@gmail.com"
+
 # =========================
-# 🕒 Funciones auxiliares
+# 🕒 Utils
 # =========================
 def now_et() -> dt.datetime:
     return dt.datetime.now(TZ)
@@ -55,24 +60,36 @@ def map_ticker_yf(ticker):
     if t == "ETHUSD": return "ETH-USD"
     return t
 
+def send_mail(subject: str, body: str):
+    if not GMAIL_USER or not GMAIL_PASS:
+        return
+    msg = MIMEText(body)
+    msg["Subject"] = subject
+    msg["From"] = GMAIL_USER
+    msg["To"] = ALERT_EMAIL
+    try:
+        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
+            srv.login(GMAIL_USER, GMAIL_PASS)
+            srv.sendmail(GMAIL_USER, [ALERT_EMAIL], msg.as_string())
+    except Exception as e:
+        print("❌ Error enviando correo:", e)
+
 def log_action(action, ticker, side, old, new, note=""):
     SHEET_LOG.append_row([
         now_et().isoformat(), action, ticker, side, old, new, note
     ])
 
 # =========================
-# 🏛️ Registro del mercado
+# 🏛️ Registro de mercado + correo
 # =========================
 def update_market_status():
     print("⏰ Revisando estado del mercado...")
     current_time = now_et()
-    weekday = current_time.weekday()  # 0 = lunes, 6 = domingo
+    weekday = current_time.weekday()
 
-    # Horario del mercado (NY)
     open_hour = 9
     close_hour = 16
     estado = "Cerrado"
-
     if weekday < 5 and open_hour <= current_time.hour < close_hour:
         estado = "Abierto"
 
@@ -81,52 +98,65 @@ def update_market_status():
 
     if vals and vals[-1]["FechaISO"] == today_iso:
         last_row = len(vals) + 1
-        if estado == "Abierto":
-            SHEET_MARKET.update_cell(last_row, 5, estado)
-        else:
-            hora_cierre = current_time.strftime("%H:%M:%S")
-            hora_apertura = vals[-1].get("HoraApertura", "")
-            tiempo_activo = ""
-            if hora_apertura:
-                try:
-                    h1 = dt.datetime.strptime(hora_apertura, "%H:%M:%S")
-                    h2 = dt.datetime.strptime(hora_cierre, "%H:%M:%S")
-                    diff = h2 - h1
-                    tiempo_activo = str(diff)
-                except:
-                    tiempo_activo = ""
-            SHEET_MARKET.update(f"B{last_row}:E{last_row}", [[hora_apertura, hora_cierre, tiempo_activo, estado]])
+        last_estado = vals[-1]["Estado"]
+        if estado != last_estado:
+            # cambio de estado -> enviar correo
+            if estado == "Abierto":
+                hora_apertura = current_time.strftime("%H:%M:%S")
+                SHEET_MARKET.append_row([today_iso, hora_apertura, "", "", estado])
+                send_mail(
+                    f"📈 Apertura del mercado ({today_iso})",
+                    f"El mercado abrió a las {hora_apertura} ET.\n\nEstado: {estado}"
+                )
+            elif estado == "Cerrado":
+                hora_cierre = current_time.strftime("%H:%M:%S")
+                hora_apertura = vals[-1].get("HoraApertura", "")
+                tiempo_activo = ""
+                if hora_apertura:
+                    try:
+                        h1 = dt.datetime.strptime(hora_apertura, "%H:%M:%S")
+                        h2 = dt.datetime.strptime(hora_cierre, "%H:%M:%S")
+                        diff = h2 - h1
+                        tiempo_activo = str(diff)
+                    except:
+                        tiempo_activo = ""
+                SHEET_MARKET.append_row([today_iso, hora_apertura, hora_cierre, tiempo_activo, estado])
+                send_mail(
+                    f"📉 Cierre del mercado ({today_iso})",
+                    f"El mercado cerró a las {hora_cierre} ET.\nTiempo activo: {tiempo_activo}\n\nEstado: {estado}"
+                )
     else:
-        hora_apertura = current_time.strftime("%H:%M:%S") if estado == "Abierto" else ""
-        SHEET_MARKET.append_row([
-            today_iso,
-            hora_apertura,
-            "" if estado == "Abierto" else current_time.strftime("%H:%M:%S"),
-            "",
-            estado
-        ])
+        # primera entrada del día
+        if estado == "Abierto":
+            hora_apertura = current_time.strftime("%H:%M:%S")
+            SHEET_MARKET.append_row([today_iso, hora_apertura, "", "", estado])
+            send_mail(
+                f"📈 Apertura del mercado ({today_iso})",
+                f"El mercado abrió a las {hora_apertura} ET.\n\nEstado: {estado}"
+            )
+
     print(f"📅 Estado del mercado ({today_iso}): {estado}")
 
 # =========================
-# 📈 Lógica de actualización
+# 📈 Confirmaciones / Resultados
 # =========================
 def update_confirmations_and_results():
-    print("🔁 Iniciando actualización de confirmaciones y resultados...")
+    print("🔁 Actualizando señales...")
     rows = SHEET_SIGNALS.get_all_records()
     if not rows:
-        print("⚠️ No hay señales registradas.")
+        print("⚠️ No hay señales.")
         return
 
     df = pd.DataFrame(rows)
     if "Estado" not in df.columns:
-        print("⚠️ No se encontró columna 'Estado'.")
+        print("⚠️ Falta columna Estado.")
         return
 
     for i, row in enumerate(rows, start=2):
         try:
             estado = row.get("Estado", "")
             ticker = row.get("Ticker", "")
-            side = row.get("Side", "Buy").lower()
+            side = row.get("Side", "buy").lower()
             scheduled = row.get("ScheduledConfirm", "")
             sl = float(row.get("SL") or 0)
             tp = float(row.get("TP") or 0)
@@ -169,11 +199,10 @@ def update_confirmations_and_results():
                     log_action("Resultado", ticker, side, estado, resultado)
         except Exception as e:
             log_action("Error", row.get("Ticker", ""), row.get("Side", ""), "", "", str(e))
-
-    print("✅ Actualización completada correctamente.")
+    print("✅ Señales actualizadas correctamente.")
 
 # =========================
-# 🧹 Limpieza automática
+# 🧹 Limpieza semanal
 # =========================
 def cleanup_old_logs(days=7):
     print("🧹 Limpiando logs antiguos...")
@@ -185,15 +214,13 @@ def cleanup_old_logs(days=7):
     SHEET_LOG.clear()
     SHEET_LOG.update("A1", [["Timestamp", "Action", "Ticker", "Side", "Old", "New", "Note"]])
     for v in new_vals:
-        SHEET_LOG.append_row([
-            v["Timestamp"], v["Action"], v["Ticker"], v["Side"], v["Old"], v["New"], v["Note"]
-        ])
+        SHEET_LOG.append_row([v["Timestamp"], v["Action"], v["Ticker"], v["Side"], v["Old"], v["New"], v["Note"]])
     print(f"🧾 {len(vals)-len(new_vals)} registros antiguos eliminados.")
 
 # =========================
 # ▶️ MAIN
 # =========================
 if __name__ == "__main__":
-    update_market_status()                  # registrar apertura/cierre
-    update_confirmations_and_results()      # confirmar operaciones
-    cleanup_old_logs(7)                     # limpiar logs semanales
+    update_market_status()
+    update_confirmations_and_results()
+    cleanup_old_logs(7)
