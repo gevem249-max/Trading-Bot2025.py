@@ -3,12 +3,12 @@ name: Recalibrate Bot
 on:
   schedule:
     - cron: "0 */6 * * *"   # cada 6 horas
-    - cron: "0 0 * * 0"     # domingo a medianoche (limpieza semanal)
   workflow_dispatch:
 
 jobs:
   recalibrate:
     runs-on: ubuntu-latest
+
     steps:
       - name: Checkout repo
         uses: actions/checkout@v3
@@ -30,32 +30,3 @@ jobs:
         run: |
           echo "🚀 Ejecutando recalibrate.py"
           python recalibrate.py
-
-      - name: Cleanup debug log (solo domingos)
-        if: github.event.schedule == '0 0 * * 0'
-        env:
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
-        run: |
-          echo "🧹 Limpiando registros antiguos de debug..."
-          python - <<'EOF'
-import os, json, gspread
-from google.oauth2.service_account import Credentials
-
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-GS_JSON = json.loads(os.getenv("GOOGLE_SHEETS_JSON"))
-CREDS = Credentials.from_service_account_info(GS_JSON, scopes=["https://www.googleapis.com/auth/spreadsheets"])
-GC = gspread.authorize(CREDS)
-
-try:
-    ws = GC.open_by_key(SPREADSHEET_ID).worksheet("debug")
-    vals = ws.get_all_values()
-    header, rows = vals[0], vals[1:]
-    # Mantener solo últimos 200 registros
-    keep = rows[-200:]
-    ws.clear()
-    ws.update("A1", [header] + keep)
-    print("✅ Debug log limpiado (últimos 200 registros)")
-except Exception as e:
-    print("⚠️ No se pudo limpiar debug:", e)
-EOF
