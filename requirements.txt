@@ -12,9 +12,9 @@ google-auth==2.29.0
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 
-# Opcionales útiles
+# Opcionales útiles (gráficos y requests)
 matplotlib==3.8.4
 requests==2.32.3
 
-# Para evitar error Arrow con Streamlit (si lo usas local)
+# Evitar error Arrow con pandas
 pyarrow==13.0.0
