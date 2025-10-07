@@ -32,5 +32,6 @@ jobs:
           ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
           ALERT_MICROS: ${{ secrets.ALERT_MICROS }}
           ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
+          NEWS_API_KEY: ${{ secrets.NEWS_API_KEY }}
         run: |
           python bot.py
