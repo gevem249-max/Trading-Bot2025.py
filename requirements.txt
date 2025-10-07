@@ -1,4 +1,7 @@
 # Core
+pytz==2024.1
+
+# Data & Finance
 pandas==2.2.2
 numpy==1.26.4
 yfinance==0.2.38
@@ -9,10 +12,11 @@ google-auth==2.29.0
 google-auth-oauthlib==1.2.0
 google-auth-httplib2==0.2.0
 
-# Email / utilidades
-requests==2.32.3
-pytz==2024.1
+# Email
+smtplib-client==0.5.1  # Wrapper seguro, aunque usamos smtplib nativo
 
-# Para logs y compatibilidad
+# Plotting (si más adelante usas gráficos)
 matplotlib==3.8.4
+
+# Para evitar errores con Streamlit (opcional si lo usas después)
 pyarrow==13.0.0
