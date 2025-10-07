@@ -1,14 +1,18 @@
 # Core
 pandas==2.2.2
 numpy==1.26.4
-pytz==2024.1
-
-# Finanzas
 yfinance==0.2.38
 
 # Google Sheets
 gspread==6.1.2
 google-auth==2.29.0
+google-auth-oauthlib==1.2.0
+google-auth-httplib2==0.2.0
 
-# Email y Requests
+# Email / utilidades
 requests==2.32.3
+pytz==2024.1
+
+# Para logs y compatibilidad
+matplotlib==3.8.4
+pyarrow==13.0.0
