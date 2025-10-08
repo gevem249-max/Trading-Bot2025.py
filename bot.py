@@ -1,286 +1,196 @@
 # ==================================================
-# 🔁 BLOQUE COMPLETO FINAL — SESIONES, MONITOREO, ANÁLISIS Y RESÚMENES (CORREGIDO)
+# 🔁 BLOQUE FINAL — MONITOREO, ANÁLISIS, SIMULACIÓN Y REGISTRO COMPLETO
 # ==================================================
-# (Agregar al final del archivo sin borrar código anterior)
 
-# =========================
-# 🧩 IMPORTS DE SEGURIDAD
-# =========================
-try:
-    import datetime as dt
-except Exception as e:
-    import datetime
-    dt = datetime
-    print("⚠️ Ajuste automático: datetime import corregido.", e)
+def safe_to_datetime(df, col):
+    if col in df.columns:
+        try:
+            df[col] = pd.to_datetime(df[col], errors="coerce")
+        except Exception as e:
+            log_debug("safe_to_datetime", f"Error convirtiendo {col}: {e}")
+    return df
 
-import matplotlib.pyplot as plt
-from io import BytesIO
-import base64
+def recalibrate_global():
+    try:
+        log_debug("recalibrate_global", "Inicio de recalibración global")
+        vals = WS_SIGNALS.get_all_records()
+        if not vals:
+            return
+        df = pd.DataFrame(vals)
+        df = safe_to_datetime(df, "FechaISO")
+        if "ProbFinal" in df.columns:
+            df["ProbFinal"] = pd.to_numeric(df["ProbFinal"], errors="coerce").fillna(0)
+        cutoff = now_et() - dt.timedelta(days=7)
+        df = df[df["FechaISO"] >= cutoff]
+        def clasificar_prob(p):
+            if p >= 90: return "Alta"
+            elif p >= 70: return "Media"
+            else: return "Baja"
+        df["ProbClasificación"] = df["ProbFinal"].apply(clasificar_prob)
+        WS_SIGNALS.clear()
+        WS_SIGNALS.update("A1", [list(df.columns)] + df.fillna("").astype(str).values.tolist())
+        log_debug("recalibrate_global", f"Recalibradas {len(df)} filas")
+    except Exception as e:
+        log_debug("recalibrate_global_error", str(e))
 
-# =========================
-# 🕓 UTILIDADES DE TIEMPO / SESIONES
-# =========================
-def _t_at(hour: int, minute: int = 0, base: dt.datetime | None = None) -> dt.datetime:
-    if base is None:
-        base = now_et()
-    return base.replace(hour=hour, minute=minute, second=0, microsecond=0)
+def ensure_all_sheets_exist():
+    required = {
+        "signals": HEADERS_SIGNALS,
+        "summary": ["Fecha","Total","Pre","Confirmadas","Canceladas","Dormidas","Activos",
+                    "Promedio_ProbFinal","Máx_ProbFinal","Mín_ProbFinal","Mercados","Notas"],
+        "state": ["date","dkng_open_sent","dkng_close_sent","es_open_sent","es_close_sent","last_purge_ts"],
+        "market_status": ["FechaISO","Ticker","Hora","TipoMercado","Estado","Sesión","ProbFinal","Tiempo","Nota"],
+        "debug": ["ts","ctx","msg"]
+    }
+    for title, headers in required.items():
+        try:
+            try:
+                SS.worksheet(title)
+            except gspread.WorksheetNotFound:
+                ws = SS.add_worksheet(title=title, rows=1000, cols=len(headers))
+                ws.update("A1", [headers])
+                log_debug("ensure_sheet", f"Creada hoja: {title}")
+        except Exception as e:
+            log_debug("ensure_sheet_error", f"{title}: {e}")
 
-def _is_between(t: dt.datetime, start: dt.datetime, end: dt.datetime) -> bool:
-    if end >= start:
-        return start <= t < end
-    return t >= start or t < end  # cruza medianoche
+def simulate_result(ticker: str, side: str, df: pd.DataFrame) -> tuple[str, str]:
+    try:
+        if df is None or df.empty or "Close" not in df.columns or len(df) < 3:
+            return ("N/A", "Sin datos")
+        prev_price = df["Close"].iloc[-2]
+        current_price = df["Close"].iloc[-1]
+        direction = "↑" if current_price > prev_price else "↓" if current_price < prev_price else "→"
+        resultado = (
+            "✅ A favor (simulada)" if (side.lower() == "buy" and direction == "↑") or
+                                     (side.lower() == "sell" and direction == "↓")
+            else "❌ En contra (simulada)" if direction != "→"
+            else "🕓 Sin cambio"
+        )
+        return (direction, resultado)
+    except Exception as e:
+        return ("N/A", f"Error simulación: {e}")
 
-# =========================
-# 📈 ESTADO DE MERCADO (con Globex hasta 08:00 ET)
-# =========================
-def market_status(ticker: str) -> tuple[str, str]:
-    t = now_et()
-    wd = t.weekday()
-    if ticker.upper() == "DKNG":
-        if wd >= 5:
-            return ("closed", "equity")
-        if _is_between(t, _t_at(9, 30, t), _t_at(16, 0, t)):
-            return ("open", "equity")
-        return ("closed", "equity")
-
-    pause_start, pause_end, globex_end = _t_at(16, 0, t), _t_at(18, 5, t), _t_at(8, 0, t)
-    if _is_between(t, pause_start, pause_end):
-        return ("closed", "futures")
-    if _is_between(t, pause_end, globex_end):
-        return ("open", "futures")
-    return ("open", "futures")
-
-def es_session_label() -> str:
-    t = now_et()
-    pause_start, pause_end, globex_end = _t_at(16, 0, t), _t_at(18, 5, t), _t_at(8, 0, t)
-    if _is_between(t, pause_start, pause_end):
-        return "Pause"
-    if _is_between(t, pause_end, globex_end):
-        return "Globex"
-    return "Pit"
-
-# =========================
-# ⚙️ FRECUENCIA ADAPTATIVA
-# =========================
-def adaptive_cycle_config(now_dt: dt.datetime | None = None) -> tuple[int, int]:
-    if now_dt is None:
-        now_dt = now_et()
-    morning_start, morning_end = _t_at(9, 30, now_dt), _t_at(13, 30, now_dt)
-    close_et, globex_start, globex_end = _t_at(16, 0, now_dt), _t_at(18, 5, now_dt), _t_at(8, 0, now_dt)
-    if _is_between(now_dt, morning_start, morning_end):
-        return (240, 60)
-    if _is_between(now_dt, morning_end, close_et):
-        return (3, 600)
-    if _is_between(now_dt, globex_start, globex_end):
-        return (6, 300)
-    return (2, 900)
-
-# =========================
-# 📣 NOTIFICACIONES DE APERTURA / CIERRE
-# =========================
 def notify_open_close():
     st = read_state_today()
-    tstr = now_et().strftime("%Y-%m-%d %H:%M:%S")
+    t = now_et().strftime("%Y-%m-%d %H:%M:%S")
     m_dk, _ = market_status("DKNG")
-
     if m_dk == "open" and not st.get("dkng_open_sent"):
-        send_mail_many("🟢 Apertura DKNG", f"DKNG abierto {tstr} ET", ALERT_DKNG)
+        send_mail_many("🟢 Apertura DKNG", f"DKNG abierto {t} ET", ALERT_DKNG)
         upsert_state({"dkng_open_sent": "1"})
-
     if m_dk == "closed" and not st.get("dkng_close_sent"):
-        send_mail_many("🔴 Cierre DKNG", f"DKNG cerrado {tstr} ET", ALERT_DKNG)
+        send_mail_many("🔴 Cierre DKNG", f"DKNG cerrado {t} ET", ALERT_DKNG)
         upsert_state({"dkng_close_sent": "1"})
         send_daily_summary()
-
     m_es, _ = market_status("ES")
     prev_state = getattr(notify_open_close, "_prev_es_state", None)
-    session = es_session_label()
-
     if m_es == "open":
-        if prev_state != "open" and session == "Globex":
-            log_debug("market_status", "ES Globex abierto — análisis nocturno activo")
-            send_mail_many("🌙 Apertura Globex (ES)", f"Globex abierto {tstr} ET", ALERT_ES)
+        if prev_state != "open":
+            log_debug("market_status", "ES reabierto — análisis nocturno (Globex)")
         if not st.get("es_open_sent"):
-            send_mail_many("🟢 Apertura ES", f"ES abierto {tstr} ET", ALERT_ES)
+            send_mail_many("🟢 Apertura ES", f"ES abierto {t} ET", ALERT_ES)
             upsert_state({"es_open_sent": "1"})
-
-    else:
+    elif m_es == "closed":
         if prev_state != "closed":
-            log_debug("market_status", "ES en pausa (16:00–18:05 ET)")
-        last_sess = getattr(notify_open_close, "_prev_es_session", None)
-        if last_sess == "Globex" and session != "Globex" and not st.get("es_close_sent"):
-            send_mail_many("🌙 Cierre Globex (ES)", f"Globex cerrado {tstr} ET", ALERT_ES)
+            log_debug("market_status", "ES en pausa — fuera de sesión (Globex)")
+        if not st.get("es_close_sent"):
+            send_mail_many("🔴 Cierre ES", f"ES cerrado {t} ET", ALERT_ES)
             upsert_state({"es_close_sent": "1"})
-
     notify_open_close._prev_es_state = m_es
-    notify_open_close._prev_es_session = session
 
-# =========================
-# 📊 REGISTRO ESTADO DEL MERCADO
-# =========================
 def log_market_state():
     try:
-        ws = ensure_ws_market_status()
+        ws = ensure_ws("market_status", ["FechaISO","Ticker","Hora","TipoMercado",
+                                         "Estado","Sesión","ProbFinal","Tiempo","Nota"])
         t = now_et()
-        fecha, hora = t.strftime("%Y-%m-%d"), t.strftime("%H:%M:%S")
+        fecha = t.strftime("%Y-%m-%d")
+        hora = t.strftime("%H:%M:%S")
+        vals = WS_SIGNALS.get_all_records()
+        df = pd.DataFrame(vals) if vals else pd.DataFrame()
+        prob_final = "-"
+        tendencia = "Sin datos"
+        if not df.empty and "ProbFinal" in df.columns:
+            df_today = df[df["FechaISO"] == fecha]
+            prob_final = round(df_today["ProbFinal"].astype(float).mean(), 2) if not df_today.empty else "-"
+            alcistas = (df_today["Side"].str.lower() == "buy").sum()
+            bajistas = (df_today["Side"].str.lower() == "sell").sum()
+            if alcistas > bajistas: tendencia = "📈 Alcista"
+            elif bajistas > alcistas: tendencia = "📉 Bajista"
+            else: tendencia = "➖ Neutral"
         for tk in WATCHLIST:
             estado, tipo = market_status(tk)
-            sesion = es_session_label() if tk.upper() == "ES" else "NYSE"
-            ws.append_row([
-                fecha, tk.upper(), hora, tipo, estado.capitalize(),
-                sesion, "-", f"{estado}_{sesion}", "Registro automático"
-            ])
+            sesion = "Globex" if tk.upper() == "ES" else "NYSE"
+            nota = "Analizando" if estado == "open" else "Fuera de horario"
+            ws.append_row([fecha, tk.upper(), hora, tipo, estado.capitalize(),
+                           sesion, prob_final, f"{SLEEP_SECONDS}s", tendencia + " | " + nota])
             log_debug("market_state", f"{tk} → {estado} ({sesion})")
     except Exception as e:
         log_debug("market_state_error", str(e))
 
-# =========================
-# 📈 ANÁLISIS DE TENDENCIA Y APRENDIZAJE
-# =========================
-def analyze_market_trend():
+def process_ticker(ticker: str, side: str = "buy", entry: float|None = None):
     try:
-        today = now_et().strftime("%Y-%m-%d")
-        vals = WS_SIGNALS.get_all_records()
-        if not vals:
-            return
-        df = pd.DataFrame(vals)
-        df_today = df[df["FechaISO"] == today]
-        if df_today.empty:
-            return
-
-        avg_prob = round(df_today["ProbFinal"].astype(float).mean(), 2)
-        pos = (df_today["Side"].str.lower() == "buy").sum()
-        neg = (df_today["Side"].str.lower() == "sell").sum()
-
-        trend = "Neutral"
-        if pos > neg * 1.2:
-            trend = "Alcista"
-        elif neg > pos * 1.2:
-            trend = "Bajista"
-
-        subject = f"📊 Análisis Diario {today} — Tendencia {trend}"
-        body = (
-            f"Tendencia dominante: {trend}\n"
-            f"Promedio ProbFinal: {avg_prob}%\n"
-            f"Buy: {pos} | Sell: {neg}\n"
-            f"Total señales: {len(df_today)}"
-        )
-        send_mail_many(subject, body, ALERT_DEFAULT)
-        log_debug("market_analysis", f"{today}: {trend}, Prob={avg_prob}%")
+        status, market_kind = market_status(ticker)
+        t = now_et()
+        pm = prob_multi_frame(ticker, side)
+        p1,p5,p15,p1h = (pm["per_frame"]["1m"], pm["per_frame"]["5m"], pm["per_frame"]["15m"], pm["per_frame"]["1h"])
+        pf = pm["final"]
+        df = fetch_yf(ticker, "1m", "1d")
+        direction, result = simulate_result(ticker, side, df)
+        entry = float(df["Close"].iloc[-1]) if entry is None and not df.empty else entry or 0.0
+        clasif = "≥80" if pf >= PRE_THRESHOLD else "<80"
+        estado = "Pre" if pf >= PRE_THRESHOLD else "Observada"
+        tipo = "Real" if pf >= PRE_THRESHOLD else "Simulada"
+        sched = (t + dt.timedelta(minutes=CONFIRM_WAIT_MIN)).isoformat() if pf >= PRE_THRESHOLD else ""
+        recipients = ALERT_DKNG if ticker.upper()=="DKNG" else ALERT_ES
+        sl, tp = compute_sl_tp(entry, side, 0.0)
+        row = {
+            "FechaISO": t.strftime("%Y-%m-%d"),
+            "HoraLocal": t.strftime("%H:%M"),
+            "HoraRegistro": t.strftime("%H:%M:%S"),
+            "Ticker": ticker.upper(),
+            "Side": side.title(),
+            "Entrada": entry,
+            "Prob_1m": p1, "Prob_5m": p5, "Prob_15m": p15, "Prob_1h": p1h,
+            "ProbFinal": pf, "ProbClasificación": clasif,
+            "Estado": estado, "Tipo": tipo,
+            "Resultado": result,
+            "Nota": f"{status} {direction}",
+            "Mercado": market_kind,
+            "pattern": "none", "pat_score": 0,
+            "macd_val": 0.0, "sr_score": 0, "atr": 0.0,
+            "SL": sl, "TP": tp, "Recipients": recipients,
+            "ScheduledConfirm": sched
+        }
+        append_signal_row(row)
+        if pf >= PRE_THRESHOLD:
+            subject = f"📊 Pre-señal {ticker} {side} {entry} – {pf}%"
+            body = (f"{ticker} {side} @ {entry}\n"
+                    f"ProbFinal {pf}% (1m {p1} / 5m {p5} / 15m {p15} / 1h {p1h})\n"
+                    f"SL {sl} | TP {tp}\nResultado simulado: {result}")
+            send_mail_many(subject, body, recipients)
     except Exception as e:
-        log_debug("market_analysis_error", str(e))
+        log_debug("process_ticker", f"{ticker}: {e}")
 
-# =========================
-# 🚀 MAIN COMPLETO FINAL
-# =========================
 def main():
     log_debug("main", "run start")
+    ensure_all_sheets_exist()
     notify_open_close()
     purge_old_debug(days=7)
-    try:
-        log_market_state()
-    except Exception as e:
-        log_debug("market_state_call", str(e))
-
-    _cycles, _sleep = adaptive_cycle_config()
-    log_debug("cycle_config", f"CYCLES={_cycles}, SLEEP={_sleep}s")
-
-    for i in range(_cycles):
+    log_market_state()
+    current_hour = now_et().hour
+    CYCLES_MORNING = 16
+    CYCLES_EVENING = 8
+    SLEEP_SECONDS_MORNING = 900
+    SLEEP_SECONDS_EVENING = 3600
+    cycles = CYCLES_MORNING if current_hour < 13 else CYCLES_EVENING
+    sleep_time = SLEEP_SECONDS_MORNING if current_hour < 13 else SLEEP_SECONDS_EVENING
+    for i in range(cycles):
         start_time = time.time()
         for tk in WATCHLIST:
             process_ticker(tk, "buy", None)
         check_pending_confirmations()
+        recalibrate_global()
         log_cycle_time(i + 1, start_time)
-        if i < _cycles - 1:
-            time.sleep(_sleep)
-
+        if i < cycles - 1:
+            time.sleep(sleep_time)
     weekly_log_summary()
-    analyze_market_trend()
-    update_prob_chart_sheet()
-    send_prob_chart_email()
     log_debug("main", "run end")
-
-# ==================================================
-# 📈 BLOQUE ADICIONAL — GRÁFICO AUTOMÁTICO DE PROBABILIDAD DIARIA
-# ==================================================
-def ensure_ws_prob_chart():
-    try:
-        ws = SS.worksheet("prob_chart")
-    except gspread.WorksheetNotFound:
-        ws = SS.add_worksheet(title="prob_chart", rows=500, cols=5)
-        ws.update("A1", [["Fecha", "Ticker", "ProbFinal", "Tendencia", "Promedio"]])
-        return ws
-    vals = ws.get_all_values()
-    if not vals:
-        ws.update("A1", [["Fecha", "Ticker", "ProbFinal", "Tendencia", "Promedio"]])
-    return ws
-
-def update_prob_chart_sheet():
-    try:
-        ws = ensure_ws_prob_chart()
-        vals = WS_SIGNALS.get_all_records()
-        if not vals:
-            return
-        df = pd.DataFrame(vals)
-        df["ProbFinal"] = pd.to_numeric(df["ProbFinal"], errors="coerce")
-        df = df.dropna(subset=["ProbFinal"])
-        df_group = df.groupby(["FechaISO", "Ticker"])["ProbFinal"].mean().reset_index()
-        df_group["Promedio"] = round(df_group["ProbFinal"].mean(), 2)
-        df_group["Tendencia"] = np.where(df_group["ProbFinal"] > df_group["Promedio"], "Alta", "Baja")
-        ws.clear()
-        ws.update("A1", [list(df_group.columns)])
-        ws.update("A2", df_group.astype(str).values.tolist())
-        log_debug("prob_chart", f"{len(df_group)} registros actualizados")
-    except Exception as e:
-        log_debug("prob_chart_error", str(e))
-
-def generate_prob_chart_image():
-    try:
-        vals = WS_SIGNALS.get_all_records()
-        if not vals:
-            return None
-        df = pd.DataFrame(vals)
-        df["ProbFinal"] = pd.to_numeric(df["ProbFinal"], errors="coerce")
-        df = df.dropna(subset=["ProbFinal"])
-        df_group = df.groupby("FechaISO")["ProbFinal"].mean().reset_index()
-        if df_group.empty:
-            return None
-        plt.figure(figsize=(8, 4))
-        plt.plot(df_group["FechaISO"], df_group["ProbFinal"], marker="o", linestyle="-")
-        plt.title("Evolución diaria del ProbFinal")
-        plt.xlabel("Fecha")
-        plt.ylabel("ProbFinal (%)")
-        plt.grid(True)
-        plt.tight_layout()
-        img_bytes = BytesIO()
-        plt.savefig(img_bytes, format="png")
-        img_bytes.seek(0)
-        plt.close()
-        encoded = base64.b64encode(img_bytes.read()).decode("utf-8")
-        return encoded
-    except Exception as e:
-        log_debug("prob_chart_image_error", str(e))
-        return None
-
-def send_prob_chart_email():
-    try:
-        today = now_et().strftime("%Y-%m-%d")
-        encoded = generate_prob_chart_image()
-        if not encoded:
-            return
-        html = f"""
-        <html><body>
-        <h3>📈 Evolución de ProbFinal — {today}</h3>
-        <p>Promedio diario de probabilidades detectadas.</p>
-        <img src="data:image/png;base64,{encoded}" alt="ProbChart"/>
-        </body></html>"""
-        msg = MIMEText(html, "html")
-        msg["Subject"] = f"📊 Gráfico Diario ProbFinal — {today}"
-        msg["From"] = GMAIL_USER
-        msg["To"] = ALERT_DEFAULT
-        with smtplib.SMTP_SSL("smtp.gmail.com", 465) as s:
-            s.login(GMAIL_USER, GMAIL_PASS)
-            s.sendmail(GMAIL_USER, ALERT_DEFAULT.split(","), msg.as_string())
-        log_debug("prob_chart_email", "Gráfico diario enviado")
-    except Exception as e:
-        log_debug("prob_chart_email_error", str(e))
