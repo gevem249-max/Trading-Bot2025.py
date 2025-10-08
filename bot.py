@@ -121,6 +121,42 @@ def weekly_log_summary():
 
 
 # =========================
+# 📣 EXTENSIÓN DE NOTIFY_OPEN_CLOSE
+# =========================
+def notify_open_close():
+    st = read_state_today()
+    t = now_et().strftime("%Y-%m-%d %H:%M:%S")
+
+    # DKNG
+    m_dk, _ = market_status("DKNG")
+    if m_dk == "open" and not st.get("dkng_open_sent"):
+        send_mail_many("🟢 Apertura DKNG", f"DKNG abierto {t} ET", ALERT_DKNG)
+        upsert_state({"dkng_open_sent": "1"})
+    if m_dk == "closed" and not st.get("dkng_close_sent"):
+        send_mail_many("🔴 Cierre DKNG", f"DKNG cerrado {t} ET", ALERT_DKNG)
+        upsert_state({"dkng_close_sent": "1"})
+        send_daily_summary()  # ✅ resumen diario automático
+
+    # ES (Globex)
+    m_es, _ = market_status("ES")
+    prev_state = getattr(notify_open_close, "_prev_es_state", None)
+
+    if m_es == "open":
+        if prev_state != "open":
+            log_debug("market_status", "ES reabierto — comienza análisis nocturno (Globex)")
+        if not st.get("es_open_sent"):
+            send_mail_many("🟢 Apertura ES", f"ES abierto {t} ET", ALERT_ES)
+            upsert_state({"es_open_sent": "1"})
+    elif m_es == "closed":
+        if prev_state != "closed":
+            log_debug("market_status", "ES en pausa — fuera de sesión (Globex)")
+        if not st.get("es_close_sent"):
+            send_mail_many("🔴 Cierre ES", f"ES cerrado {t} ET", ALERT_ES)
+            upsert_state({"es_close_sent": "1"})
+    notify_open_close._prev_es_state = m_es
+
+
+# =========================
 # 🚀 MAIN EXTENDIDO (mantiene todo lo anterior)
 # =========================
 def main():
@@ -142,30 +178,3 @@ def main():
     weekly_log_summary()
 
     log_debug("main", "run end")
-
-
-# =========================
-# 📣 EXTENSIÓN DE NOTIFY_OPEN_CLOSE
-# =========================
-def notify_open_close():
-    st = read_state_today()
-    t = now_et().strftime("%Y-%m-%d %H:%M:%S")
-
-    # DKNG
-    m_dk, _ = market_status("DKNG")
-    if m_dk == "open" and not st.get("dkng_open_sent"):
-        send_mail_many("🟢 Apertura DKNG", f"DKNG abierto {t} ET", ALERT_DKNG)
-        upsert_state({"dkng_open_sent": "1"})
-    if m_dk == "closed" and not st.get("dkng_close_sent"):
-        send_mail_many("🔴 Cierre DKNG", f"DKNG cerrado {t} ET", ALERT_DKNG)
-        upsert_state({"dkng_close_sent": "1"})
-        send_daily_summary()  # ✅ resumen diario automático
-
-    # ES (Globex)
-    m_es, _ = market_status("ES")
-    if m_es == "open" and not st.get("es_open_sent"):
-        send_mail_many("🟢 Apertura ES", f"ES abierto {t} ET", ALERT_ES)
-        upsert_state({"es_open_sent": "1"})
-    if m_es == "closed" and not st.get("es_close_sent"):
-        send_mail_many("🔴 Cierre ES", f"ES cerrado {t} ET", ALERT_ES)
-        upsert_state({"es_close_sent": "1"})
