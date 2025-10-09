@@ -251,7 +251,7 @@ def main():
     purge_old_debug(days=7)
     log_market_state()
 
-    # 🔹 Ciclo principal (15 min) dividido en tres subciclos de 5 min
+    # 🔹 Ciclo principal (CYCLES) con 3 subciclos de 5 min (total ~15 min)
     for main_cycle in range(CYCLES):
         log_debug("cycle_main", f"Inicio ciclo principal {main_cycle + 1}")
         main_start = time.time()
@@ -260,8 +260,10 @@ def main():
             sub_start = time.time()
             log_debug("sub_cycle", f"Subciclo {sub_cycle + 1} del ciclo {main_cycle + 1}")
 
+            # 👉 process_ticker registra SIEMPRE (≥80 y <80)
             for tk in WATCHLIST:
                 process_ticker(tk, "buy", None)
+
             check_pending_confirmations()
             log_cycle_time(f"{main_cycle + 1}.{sub_cycle + 1}", sub_start)
 
