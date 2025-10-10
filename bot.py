@@ -66,10 +66,10 @@ def send_daily_summary():
         mercados = ", ".join(sorted(df_today["Mercado"].unique()))
 
         # estadísticas de probabilidad
-        prob_series = df_today["ProbFinal"].astype(float)
-        prom = round(prob_series.mean(), 2)
-        pmax = round(prob_series.max(), 2)
-        pmin = round(prob_series.min(), 2)
+        prob_series = pd.to_numeric(df_today["ProbFinal"], errors="coerce").dropna()
+        prom = round(prob_series.mean(), 2) if not prob_series.empty else "-"
+        pmax = round(prob_series.max(), 2) if not prob_series.empty else "-"
+        pmin = round(prob_series.min(), 2) if not prob_series.empty else "-"
 
         # guardar en hoja summary
         ws_sum = ensure_ws_summary()
@@ -113,7 +113,7 @@ def weekly_log_summary():
         pre = (df7["Estado"] == "Pre").sum()
         conf = (df7["Estado"] == "Confirmada").sum()
         canc = (df7["Estado"] == "Cancelada").sum()
-        prom = round(df7["ProbFinal"].astype(float).mean(), 2)
+        prom = round(pd.to_numeric(df7["ProbFinal"], errors="coerce").dropna().mean(), 2)
         log_debug("weekly_summary",
                   f"Últimos 7 días → Total {total}, Pre {pre}, Confirmadas {conf}, Canceladas {canc}, Promedio {prom}%")
     except Exception as e:
@@ -148,11 +148,9 @@ def notify_open_close():
             df = pd.DataFrame(vals) if vals else pd.DataFrame()
             prob_final = "-"
             if not df.empty and "ProbFinal" in df.columns:
-                try:
-                    df_today = df[df["FechaISO"] == now_et().strftime("%Y-%m-%d")]
-                    prob_final = round(df_today["ProbFinal"].astype(float).mean(), 2)
-                except Exception:
-                    prob_final = "-"
+                s = pd.to_numeric(df.loc[df["FechaISO"] == now_et().strftime("%Y-%m-%d"), "ProbFinal"], errors="coerce").dropna()
+                if not s.empty:
+                    prob_final = round(s.mean(), 2)
             send_mail_many(
                 "🌙 Apertura Globex (ES)",
                 f"Globex abierto {t} ET\nPromedio ProbFinal actual: {prob_final}%",
@@ -176,9 +174,10 @@ def notify_open_close():
                     pre = (dfe["Estado"] == "Pre").sum()
                     conf = (dfe["Estado"] == "Confirmada").sum()
                     canc = (dfe["Estado"] == "Cancelada").sum()
-                    prom = round(dfe["ProbFinal"].astype(float).mean(), 2) if total else "-"
-                    pmax = round(dfe["ProbFinal"].astype(float).max(), 2) if total else "-"
-                    pmin = round(dfe["ProbFinal"].astype(float).min(), 2) if total else "-"
+                    s = pd.to_numeric(dfe["ProbFinal"], errors="coerce").dropna()
+                    prom = round(s.mean(), 2) if not s.empty else "-"
+                    pmax = round(s.max(), 2) if not s.empty else "-"
+                    pmin = round(s.min(), 2) if not s.empty else "-"
                 except Exception:
                     total = pre = conf = canc = 0
                     prom = pmax = pmin = "-"
@@ -227,11 +226,9 @@ def log_market_state():
         df = pd.DataFrame(vals) if vals else pd.DataFrame()
         prob_final = "-"
         if not df.empty and "ProbFinal" in df.columns:
-            try:
-                df_today = df[df["FechaISO"] == fecha]
-                prob_final = round(df_today["ProbFinal"].astype(float).mean(), 2)
-            except Exception:
-                prob_final = "-"
+            s = pd.to_numeric(df.loc[df["FechaISO"] == fecha, "ProbFinal"], errors="coerce").dropna()
+            if not s.empty:
+                prob_final = round(s.mean(), 2)
         for tk in WATCHLIST:
             estado, tipo = market_status(tk)
             sesion = "Globex" if tk.upper() == "ES" else "NYSE"
