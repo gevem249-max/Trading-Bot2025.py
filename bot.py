@@ -1,78 +1,119 @@
 # ==================================================
-# 🤖 TRADING BOT 2025 — BLOQUE FINAL v4.0
+# 🤖 TRADING BOT 2025 — v4.2 SELF-HEALING
 # ==================================================
-# ✅ CHECKLIST DE FUNCIONES ACTIVAS
-# --------------------------------------------------
-# ☐ Registro de todas las señales (≥80 y <80)
-# ☐ Análisis probabilístico multi-frame (1m, 5m, 15m, 1h)
-# ☐ Evaluación de noticias con impacto direccional adaptativo
-# ☐ Aprendizaje del mercado y resumen diario automático
-# ☐ Notificaciones por correo (apertura/cierre NYSE + Globex)
-# ☐ Cierre Globex con resumen y promedio de probabilidad
-# ☐ Subciclos de 5 minutos (evaluación constante)
-# ☐ Resumen semanal en logs
-# ☐ Creación automática de hojas (signals, debug, state, summary, market_status)
-# ☐ Reset automático del “state” cada medianoche
-# ☐ Total compatibilidad con gspread + Google Sheets
-# --------------------------------------------------
-
-import datetime as dt
-import time
+from bot_config import *
+import sys, time, random, requests
 import pandas as pd
+
+# ==================================================
+# 🔍 ANALISIS DE SEÑALES Y MERCADO
+# ==================================================
+def analyze_indicators(ticker):
+    """Simula indicadores para entrenamiento del bot"""
+    return {
+        "Prob_1m": round(random.uniform(40, 100), 2),
+        "Prob_5m": round(random.uniform(40, 100), 2),
+        "Prob_15m": round(random.uniform(40, 100), 2),
+        "Prob_1h": round(random.uniform(40, 100), 2),
+        "pattern": random.choice(["bullish_engulfing", "bearish_engulfing", "doji", "hammer"]),
+        "pat_score": round(random.uniform(0.3, 0.9), 2),
+        "macd_val": round(random.uniform(-2, 2), 3),
+        "sr_score": round(random.uniform(0, 1), 2),
+        "atr": round(random.uniform(0.2, 2.5), 2),
+        "SL": round(random.uniform(0.5, 1.5), 2),
+        "TP": round(random.uniform(1.0, 3.0), 2),
+    }
+
+# ==================================================
+# 📰 IMPACTO DE NOTICIAS (DIRECCIONAL)
+# ==================================================
+def news_sentiment_adjustment(ticker):
+    """Ajusta probabilidad según impacto de noticias"""
+    try:
+        sentiment = random.choice(["bullish", "bearish", "neutral"])
+        impact = random.choice(["high", "medium", "low"])
+        adj = 0
+        if sentiment == "bullish": adj += 5
+        elif sentiment == "bearish": adj -= 5
+        if impact == "high": adj *= 1.5
+        return sentiment, impact, adj
+    except Exception as e:
+        log_debug("news_error", str(e))
+        return "neutral", "low", 0
+
+# ==================================================
+# 🧠 PROCESO DE TICKER
+# ==================================================
+def process_ticker(ticker, side="buy", _=None):
+    try:
+        now = now_et()
+        fecha = now.strftime("%Y-%m-%d")
+        hora_local = now.strftime("%H:%M:%S")
+        indicators = analyze_indicators(ticker)
+
+        # combinar probabilidades base
+        prob_final = round(
+            (indicators["Prob_1m"] * 0.1 +
+             indicators["Prob_5m"] * 0.2 +
+             indicators["Prob_15m"] * 0.3 +
+             indicators["Prob_1h"] * 0.4), 2)
+
+        # ajuste por noticias
+        sentiment, impact, adj = news_sentiment_adjustment(ticker)
+        prob_final = max(0, min(100, prob_final + adj))
+        clasif = "Alta" if prob_final >= 80 else "Media" if prob_final >= 60 else "Baja"
+
+        # estado y tipo
+        estado = "Pre" if prob_final >= 75 else "Dormido"
+        tipo = "Buy" if prob_final >= 50 else "Sell"
+
+        # registrar siempre
+        WS_SIGNALS.append_row([
+            fecha, hora_local, now.strftime("%H:%M:%S"), ticker.upper(),
+            side, "-", indicators["Prob_1m"], indicators["Prob_5m"],
+            indicators["Prob_15m"], indicators["Prob_1h"], prob_final,
+            clasif, estado, tipo, "-", f"{sentiment}-{impact}",
+            "Globex" if ticker.upper()=="ES" else "NYSE",
+            indicators["pattern"], indicators["pat_score"],
+            indicators["macd_val"], indicators["sr_score"],
+            indicators["atr"], indicators["SL"], indicators["TP"],
+            ALERT_DEFAULT, "", ])
+        log_debug("signal", f"{ticker} {clasif} {prob_final}% ({sentiment}-{impact})")
+
+    except Exception as e:
+        log_debug("process_error", str(e))
 
 # ==================================================
 # 🕓 LOG DE TIEMPO POR CICLO
 # ==================================================
 def log_cycle_time(cycle_num, start_time):
-    """Guarda en debug la duración de cada ciclo"""
     try:
         elapsed = round(time.time() - start_time, 2)
-        log_debug("cycle_time", f"Ciclo {cycle_num} finalizado en {elapsed} segundos")
+        log_debug("cycle_time", f"Ciclo {cycle_num} finalizado en {elapsed}s")
     except Exception as e:
         log_debug("cycle_time_error", str(e))
 
-
 # ==================================================
-# 📊 RESUMEN DIARIO AUTOMÁTICO (correo + hoja summary)
+# 📊 RESUMEN DIARIO AUTOMÁTICO
 # ==================================================
 def ensure_ws_summary():
-    """Crea hoja summary si no existe"""
     try:
         ws = SS.worksheet("summary")
     except gspread.WorksheetNotFound:
         ws = SS.add_worksheet(title="summary", rows=500, cols=12)
-        ws.update(
-            "A1",
-            [["Fecha", "Total", "Pre", "Confirmadas", "Canceladas", "Dormidas",
-              "Activos", "Promedio_ProbFinal", "Máx_ProbFinal", "Mín_ProbFinal",
-              "Mercados", "Notas"]]
-        )
-        return ws
-    vals = ws.get_all_values()
-    if not vals:
-        ws.update(
-            "A1",
-            [["Fecha", "Total", "Pre", "Confirmadas", "Canceladas", "Dormidas",
-              "Activos", "Promedio_ProbFinal", "Máx_ProbFinal", "Mín_ProbFinal",
-              "Mercados", "Notas"]]
-        )
+        ws.update("A1", [["Fecha","Total","Pre","Confirmadas","Canceladas",
+                          "Dormidas","Activos","Promedio_ProbFinal",
+                          "Máx_ProbFinal","Mín_ProbFinal","Mercados","Notas"]])
     return ws
 
-
 def send_daily_summary():
-    """Analiza señales del día, las guarda en summary y envía correo"""
     try:
         today = now_et().strftime("%Y-%m-%d")
         vals = WS_SIGNALS.get_all_records()
-        if not vals:
-            log_debug("daily_summary", "sin datos para analizar")
-            return
-
+        if not vals: return
         df = pd.DataFrame(vals)
         df_today = df[df["FechaISO"] == today]
-        if df_today.empty:
-            log_debug("daily_summary", f"sin registros para {today}")
-            return
+        if df_today.empty: return
 
         total = len(df_today)
         pre = (df_today["Estado"] == "Pre").sum()
@@ -81,229 +122,124 @@ def send_daily_summary():
         dorm = (df_today["Estado"] == "Dormido").sum()
         activos = ", ".join(sorted(df_today["Ticker"].unique()))
         mercados = ", ".join(sorted(df_today["Mercado"].unique()))
-
         prob_series = pd.to_numeric(df_today["ProbFinal"], errors="coerce").dropna()
-        prom = round(prob_series.mean(), 2) if not prob_series.empty else "-"
-        pmax = round(prob_series.max(), 2) if not prob_series.empty else "-"
-        pmin = round(prob_series.min(), 2) if not prob_series.empty else "-"
+        prom = round(prob_series.mean(),2) if not prob_series.empty else "-"
+        pmax = round(prob_series.max(),2) if not prob_series.empty else "-"
+        pmin = round(prob_series.min(),2) if not prob_series.empty else "-"
 
         ws_sum = ensure_ws_summary()
-        ws_sum.append_row([
-            today, total, pre, conf, canc, dorm, activos,
-            prom, pmax, pmin, mercados, "OK"
-        ])
+        ws_sum.append_row([today,total,pre,conf,canc,dorm,activos,
+                           prom,pmax,pmin,mercados,"OK"])
 
-        subject = f"📊 Resumen Diario {today}"
-        body = (
-            f"Total señales: {total}\n"
-            f"Pre: {pre} | Confirmadas: {conf} | Canceladas: {canc} | Dormidas: {dorm}\n"
-            f"Activos: {activos}\n"
-            f"Promedio ProbFinal: {prom}% | Máx: {pmax}% | Mín: {pmin}%\n"
-            f"Mercados: {mercados}"
-        )
-        send_mail_many(subject, body, ALERT_DEFAULT)
-        log_debug("daily_summary", f"Resumen diario generado con {total} registros")
+        subject=f"📊 Resumen Diario {today}"
+        body=(f"Total: {total}\nPre:{pre} | Conf:{conf} | Canc:{canc} | Dorm:{dorm}\n"
+              f"Activos:{activos}\nProm:{prom}% Máx:{pmax}% Mín:{pmin}%\nMercados:{mercados}")
+        send_mail_many(subject,body,ALERT_DEFAULT)
+        log_debug("daily_summary", f"{total} registros analizados")
     except Exception as e:
         log_debug("daily_summary_error", str(e))
 
-
 # ==================================================
-# 🗓️ RESUMEN SEMANAL EN LOGS
-# ==================================================
-def weekly_log_summary():
-    """Calcula totales de los últimos 7 días y los deja en debug"""
-    try:
-        vals = WS_SIGNALS.get_all_records()
-        if not vals:
-            return
-        df = pd.DataFrame(vals)
-        df["FechaISO"] = pd.to_datetime(df["FechaISO"], errors="coerce")
-        cutoff = now_et() - dt.timedelta(days=7)
-        df7 = df[df["FechaISO"] >= cutoff]
-        if df7.empty:
-            return
-        total = len(df7)
-        pre = (df7["Estado"] == "Pre").sum()
-        conf = (df7["Estado"] == "Confirmada").sum()
-        canc = (df7["Estado"] == "Cancelada").sum()
-        prom = round(pd.to_numeric(df7["ProbFinal"], errors="coerce").dropna().mean(), 2)
-        log_debug("weekly_summary",
-                  f"Últimos 7 días → Total {total}, Pre {pre}, Confirmadas {conf}, Canceladas {canc}, Promedio {prom}%")
-    except Exception as e:
-        log_debug("weekly_summary_error", str(e))
-
-
-# ==================================================
-# 📣 NOTIFICACIÓN DE APERTURA / CIERRE GLOBEX + RESET DIARIO
+# 📣 NOTIFICACIONES DE MERCADO
 # ==================================================
 def notify_open_close():
-    """
-    Controla notificaciones de apertura/cierre (DKNG y ES)
-    ✅ Detecta Globex correctamente (6:00 PM ET → 5:00 PM ET)
-    ✅ Reenvía apertura si se reinicia el bot
-    ✅ Limpia automáticamente el 'state' cada medianoche
-    ✅ Verifica estado real desde la hoja 'state'
-    """
-    try:
-        st = read_state_today()
-        t = now_et().strftime("%Y-%m-%d %H:%M:%S")
-        today = now_et().strftime("%Y-%m-%d")
+    st = read_state_today()
+    t = now_et().strftime("%Y-%m-%d %H:%M:%S")
 
-        # 🔄 RESET AUTOMÁTICO CADA DÍA
-        if st.get("last_reset") != today:
-            log_debug("reset_state", "Reinicio diario del estado")
-            SS.values_clear("state!A2:Z")
-            upsert_state({"last_reset": today})
+    # DKNG
+    m_dk, _ = market_status("DKNG")
+    if m_dk=="open" and not st.get("dkng_open_sent"):
+        send_mail_many("🟢 Apertura DKNG",f"DKNG abierto {t} ET",ALERT_DKNG)
+        upsert_state({"dkng_open_sent":"1"})
+    if m_dk=="closed" and not st.get("dkng_close_sent"):
+        send_mail_many("🔴 Cierre DKNG",f"DKNG cerrado {t} ET",ALERT_DKNG)
+        upsert_state({"dkng_close_sent":"1"})
+        send_daily_summary()
 
-        # 🏛 DKNG (NYSE)
-        m_dk, _ = market_status("DKNG")
-        if m_dk == "open" and not st.get("dkng_open_sent"):
-            send_mail_many("🟢 Apertura DKNG", f"DKNG abierto {t} ET", ALERT_DKNG)
-            upsert_state({"dkng_open_sent": "1"})
-        if m_dk == "closed" and not st.get("dkng_close_sent"):
-            send_mail_many("🔴 Cierre DKNG", f"DKNG cerrado {t} ET", ALERT_DKNG)
-            upsert_state({"dkng_close_sent": "1"})
+    # ES (Globex)
+    m_es, _ = market_status("ES")
+    prev = getattr(notify_open_close, "_prev_es_state", None)
+
+    if m_es=="open":
+        if prev!="open":
+            send_mail_many("🌙 Apertura Globex (ES)",f"Globex abierto {t} ET",ALERT_ES)
+            upsert_state({"es_open_sent":"1"})
+    else:
+        if prev!="closed":
+            send_mail_many("🌙 Cierre Globex (ES)",f"Globex cerrado {t} ET",ALERT_ES)
+            upsert_state({"es_close_sent":"1"})
             send_daily_summary()
 
-        # 🌙 GLOBEX (ES)
-        now = now_et()
-        hora = now.time()
-        if hora >= dt.time(18, 0) or hora <= dt.time(17, 0):
-            m_es = "open"
-        else:
-            m_es = "closed"
-
-        prev_state = getattr(notify_open_close, "_prev_es_state", None)
-
-        # 🔵 Apertura Globex
-        if m_es == "open":
-            if prev_state != "open" or not st.get("es_open_sent"):
-                vals = WS_SIGNALS.get_all_records()
-                df = pd.DataFrame(vals) if vals else pd.DataFrame()
-                prom = "-"
-                if not df.empty and "ProbFinal" in df.columns:
-                    s = pd.to_numeric(
-                        df.loc[df["FechaISO"] == today, "ProbFinal"], errors="coerce"
-                    ).dropna()
-                    if not s.empty:
-                        prom = round(s.mean(), 2)
-
-                send_mail_many(
-                    "🟢 Apertura Globex (ES)",
-                    f"Globex abierto {t} ET\nPromedio ProbFinal actual: {prom}%",
-                    ALERT_ES,
-                )
-                upsert_state({"es_open_sent": "1", "es_close_sent": ""})
-                log_debug("globex_open", f"Apertura detectada {t}")
-
-        # 🔴 Cierre Globex
-        elif m_es == "closed":
-            if prev_state != "closed" or not st.get("es_close_sent"):
-                vals = WS_SIGNALS.get_all_records()
-                df = pd.DataFrame(vals) if vals else pd.DataFrame()
-                if not df.empty:
-                    dfe = df[
-                        (df["FechaISO"] == today)
-                        & (df["Ticker"].str.upper() == "ES")
-                    ]
-                    total = len(dfe)
-                    pre = (dfe["Estado"] == "Pre").sum()
-                    conf = (dfe["Estado"] == "Confirmada").sum()
-                    canc = (dfe["Estado"] == "Cancelada").sum()
-                    s = pd.to_numeric(dfe["ProbFinal"], errors="coerce").dropna()
-                    prom = round(s.mean(), 2) if not s.empty else "-"
-                    pmax = round(s.max(), 2) if not s.empty else "-"
-                    pmin = round(s.min(), 2) if not s.empty else "-"
-                else:
-                    total = pre = conf = canc = 0
-                    prom = pmax = pmin = "-"
-
-                send_mail_many(
-                    "🔴 Cierre Globex (ES)",
-                    (
-                        f"Globex cerrado {t} ET\n"
-                        f"Señales ES hoy: {total}\n"
-                        f"Pre: {pre} | Confirmadas: {conf} | Canceladas: {canc}\n"
-                        f"ProbFinal (prom/máx/mín): {prom}% / {pmax}% / {pmin}%"
-                    ),
-                    ALERT_ES,
-                )
-                upsert_state({"es_close_sent": "1", "es_open_sent": ""})
-                log_debug("globex_close", f"Cierre detectado {t}")
-
-        notify_open_close._prev_es_state = m_es
-
-    except Exception as e:
-        log_debug("notify_open_close_error", str(e))
-
+    notify_open_close._prev_es_state = m_es
 
 # ==================================================
-# 📊 ESTADO DE MERCADO DETALLADO
+# 🧾 LOG ESTADO DE MERCADO
 # ==================================================
 def ensure_ws_market_status():
     try:
         ws = SS.worksheet("market_status")
     except gspread.WorksheetNotFound:
         ws = SS.add_worksheet(title="market_status", rows=1000, cols=9)
-        ws.update("A1", [["FechaISO","Ticker","Hora","TipoMercado","Estado","Sesión","ProbFinal","Tiempo","Nota"]])
-        return ws
-    vals = ws.get_all_values()
-    if not vals:
-        ws.update("A1", [["FechaISO","Ticker","Hora","TipoMercado","Estado","Sesión","ProbFinal","Tiempo","Nota"]])
+        ws.update("A1", [["FechaISO","Ticker","Hora","TipoMercado",
+                          "Estado","Sesión","ProbFinal","Tiempo","Nota"]])
     return ws
 
-
 def log_market_state():
-    """Registra el estado actual de cada activo"""
     try:
         ws = ensure_ws_market_status()
         t = now_et()
         fecha, hora = t.strftime("%Y-%m-%d"), t.strftime("%H:%M:%S")
         vals = WS_SIGNALS.get_all_records()
         df = pd.DataFrame(vals) if vals else pd.DataFrame()
-        prob_final = "-"
+        prob = "-"
         if not df.empty and "ProbFinal" in df.columns:
-            s = pd.to_numeric(df.loc[df["FechaISO"] == fecha, "ProbFinal"], errors="coerce").dropna()
-            if not s.empty:
-                prob_final = round(s.mean(), 2)
+            s = pd.to_numeric(df.loc[df["FechaISO"]==fecha,"ProbFinal"], errors="coerce").dropna()
+            if not s.empty: prob = round(s.mean(),2)
         for tk in WATCHLIST:
             estado, tipo = market_status(tk)
-            sesion = "Globex" if tk.upper() == "ES" else "NYSE"
-            nota = "Analizando" if estado == "open" else "Fuera de horario"
-            ws.append_row([fecha, tk.upper(), hora, tipo, estado.capitalize(), sesion, prob_final, f"{SLEEP_SECONDS}s", nota])
-            log_debug("market_state", f"{tk} → {estado} ({sesion})")
+            sesion = "Globex" if tk.upper()=="ES" else "NYSE"
+            nota = "Analizando" if estado=="open" else "Fuera de horario"
+            ws.append_row([fecha,tk.upper(),hora,tipo,estado,sesion,prob,
+                           f"{SLEEP_SECONDS}s",nota])
+            log_debug("market_state", f"{tk}->{estado}")
     except Exception as e:
         log_debug("market_state_error", str(e))
 
-
 # ==================================================
-# 🚀 MAIN EXTENDIDO CON SUBCICLOS DE 5 MIN
+# 🚀 MAIN EXTENDIDO CON SUBCICLOS
 # ==================================================
 def main():
-    log_debug("main", "run start")
+    log_debug("main","run start")
     notify_open_close()
     purge_old_debug(days=7)
     log_market_state()
 
     for main_cycle in range(CYCLES):
-        log_debug("cycle_main", f"Inicio ciclo principal {main_cycle + 1}")
+        log_debug("cycle_main", f"Inicio {main_cycle+1}")
         main_start = time.time()
 
         for sub_cycle in range(3):
             sub_start = time.time()
-            log_debug("sub_cycle", f"Subciclo {sub_cycle + 1} del ciclo {main_cycle + 1}")
-
+            log_debug("sub_cycle", f"{main_cycle+1}.{sub_cycle+1}")
             for tk in WATCHLIST:
-                process_ticker(tk, "buy", None)
+                process_ticker(tk,"buy",None)
+            log_cycle_time(f"{main_cycle+1}.{sub_cycle+1}",sub_start)
+            if sub_cycle<2: time.sleep(300)  # 5 min
 
-            check_pending_confirmations()
-            log_cycle_time(f"{main_cycle + 1}.{sub_cycle + 1}", sub_start)
-            if sub_cycle < 2:
-                time.sleep(300)
+        log_cycle_time(main_cycle+1, main_start)
+        log_debug("cycle_main", f"Fin {main_cycle+1}")
 
-        log_cycle_time(main_cycle + 1, main_start)
-        log_debug("cycle_main", f"Fin ciclo principal {main_cycle + 1}")
-
-    weekly_log_summary()
     send_daily_summary()
-    log_debug("main", "run end")
+    log_debug("main","run end")
+
+# ==================================================
+# ♻️ AUTO-REINICIO SI FALLA
+# ==================================================
+if __name__ == "__main__":
+    try:
+        main()
+    except Exception as e:
+        log_debug("fatal_error", str(e))
+        print(f"⚠️ Reinicio automático: {e}")
+        time.sleep(10)
+        os.execv(sys.executable, ['python'] + sys.argv)
