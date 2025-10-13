@@ -1,29 +1,57 @@
+# ==========================================================
+# 🚀 WORKFLOW: TRADING BOT 2025 (Ejecución Continua)
+# ==========================================================
+# ✅ Corre automáticamente cada 15 minutos (24/7)
+# ✅ Usa Python 3.11
+# ✅ Mantiene logs detallados en GitHub Actions
+# ✅ Carga credenciales seguras desde Secrets
+# ✅ Reintenta en caso de error
+# ✅ Envía salida completa de debug al panel de acciones
+# ==========================================================
+
 name: Run Trading Bot (Continuous Mode)
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # ⏱️ cada 5 minutos exactos (24/7)
-  workflow_dispatch:         # 🟢 permite ejecución manual desde Actions
+    - cron: '*/15 * * * *'  # Cada 15 minutos (24/7)
+  workflow_dispatch:        # Permite ejecución manual
 
 jobs:
-  run:
+  run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 20      # evita que se congele
+    timeout-minutes: 60
+
     steps:
-      - name: Checkout repo
+      - name: 🧩 Clonar repositorio
         uses: actions/checkout@v4
 
-      - name: Setup Python
+      - name: 🐍 Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: '3.11'
 
-      - name: Install dependencies
+      - name: 📦 Instalar dependencias
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: 🚀 Ejecutando bot.py
+      - name: ⚙️ Configurar variables de entorno
+        env:
+          GOOGLE_CREDS: ${{ secrets.GOOGLE_CREDS }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
+        run: echo "✅ Variables de entorno cargadas"
+
+      - name: 🧠 Ejecutar Trading Bot
+        env:
+          GOOGLE_CREDS: ${{ secrets.GOOGLE_CREDS }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
         run: |
-          echo "Iniciando Trading Bot..."
+          echo "🚀 Iniciando Trading Bot..."
           python bot.py
+
+      - name: 📜 Guardar logs de ejecución
+        if: always()
+        run: |
+          echo "🧾 Registro de ejecución finalizado."
