@@ -1,32 +1,31 @@
-name: Run Trading Bot 24/7
+name: Run Trading Bot
 
 on:
   schedule:
-    - cron: '*/5 * * * *'   # cada 5 min
-  workflow_dispatch:
+    # ⏰ Ejecución diaria
+    - cron: '0 12 * * *'   # 8:00 AM ET
+    - cron: '30 13 * * *'  # 9:30 AM ET
+    - cron: '0 14 * * *'   # 10:00 AM ET
+    - cron: '30 15 * * *'  # 11:30 AM ET
+    - cron: '0 17 * * *'   # 1:00 PM ET
+    - cron: '0 22 * * *'   # 6:00 PM ET (inicio Globex)
+    - cron: '0 2 * * *'    # 10:00 PM ET (Globex activo)
+  workflow_dispatch:       # 🔘 Permite que lo ejecutes manualmente
 
 jobs:
-  trading-bot:
+  run:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-
-      - name: Set up Python
+      - name: Checkout repo
+        uses: actions/checkout@v4
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.10'
-
+          python-version: '3.11'
       - name: Install dependencies
-        run: pip install -r requirements.txt
-
-      - name: Run Bot
-        env:
-          GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
-          ALERT_ES: ${{ secrets.ALERT_ES }}
-          ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
         run: |
-          echo "🚀 Ejecutando bot.py"
-          python bot.py || echo "⚠️ Bot crash — será reiniciado en el próximo ciclo"
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+      - name: 🚀 Ejecutando bot.py
+        run: |
+          python bot.py
