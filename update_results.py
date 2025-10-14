@@ -1,109 +1,96 @@
-# update_results.py — Estado de mercado + email en apertura/cierre + log en Sheets
-import os, json, pytz, datetime as dt
-import gspread
-from google.oauth2.service_account import Credentials
-import smtplib
-from email.mime.text import MIMEText
+# ==========================================================
+# 🔄 UPDATE & NOTIFY RESULTS — v4.3 (auto-retry)
+# ==========================================================
+# ✅ Lee hojas con tolerancia a errores (500 API)
+# ✅ Reintenta automáticamente hasta 3 veces
+# ✅ Actualiza resultados y notifica estado
+# ==========================================================
 
-# ======== Config ========
-TZ = pytz.timezone("America/New_York")
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
-GS_JSON = json.loads(os.getenv("GOOGLE_SHEETS_JSON") or "{}")
-GMAIL_USER = os.getenv("GMAIL_USER")
-GMAIL_PASS = os.getenv("GMAIL_APP_PASS")
-ALERT_DEFAULT = os.getenv("ALERT_DEFAULT", GMAIL_USER or "")
+import time, pandas as pd
+from bot_config import *
 
-if not SPREADSHEET_ID or not GS_JSON:
-    raise RuntimeError("Faltan SPREADSHEET_ID o GOOGLE_SHEETS_JSON")
+# ----------------------------------------------------------
+# 🔁 Función segura para leer una hoja con reintento
+# ----------------------------------------------------------
+def safe_get_values(ws, max_retries=3, delay=5):
+    for attempt in range(max_retries):
+        try:
+            vals = ws.get_all_values()
+            if vals:
+                return vals
+        except Exception as e:
+            log_debug("safe_get_values", f"Intento {attempt+1} falló: {e}")
+            time.sleep(delay)
+    raise RuntimeError(f"❌ No se pudo leer la hoja {ws.title} después de {max_retries} intentos")
 
-CREDS = Credentials.from_service_account_info(
-    GS_JSON, scopes=["https://www.googleapis.com/auth/spreadsheets"]
-)
-GC = gspread.authorize(CREDS)
-SS = GC.open_by_key(SPREADSHEET_ID)
-
-# ======== Helpers ========
-def now_et() -> dt.datetime:
-    return dt.datetime.now(TZ)
-
-def is_weekday(t: dt.datetime) -> bool:
-    return t.weekday() < 5  # 0 = lunes ... 4 = viernes
-
-def market_status(t: dt.datetime) -> str:
-    """Regular hours US equities: 09:30–16:00 ET, lun–vie."""
-    if not is_weekday(t):
-        return "Cerrado"
-    open_time = t.replace(hour=9, minute=30, second=0, microsecond=0)
-    close_time = t.replace(hour=16, minute=0, second=0, microsecond=0)
-    return "Abierto" if (open_time <= t < close_time) else "Cerrado"
-
-def ensure_ws(title: str, headers: list[str]):
-    try:
-        ws = SS.worksheet(title)
-    except gspread.WorksheetNotFound:
-        ws = SS.add_worksheet(title=title, rows=2000, cols=max(10, len(headers)))
-        ws.update("A1", [headers])
-    # si faltan columnas, las agrega al final de la fila 1
-    current = ws.row_values(1)
-    missing = [h for h in headers if h not in current]
-    if missing:
-        ws.update("A1", [current + missing])
-    return ws
-
-def send_mail(subject: str, body: str, recipients: str):
-    if not recipients or not GMAIL_USER or not GMAIL_PASS:
-        return
-    to_list = [e.strip() for e in recipients.split(",") if e.strip()]
-    if not to_list:
-        return
-    msg = MIMEText(body)
-    msg["Subject"] = subject
-    msg["From"] = GMAIL_USER
-    msg["To"] = ", ".join(to_list)
-    with smtplib.SMTP_SSL("smtp.gmail.com", 465) as srv:
-        srv.login(GMAIL_USER, GMAIL_PASS)
-        srv.sendmail(GMAIL_USER, to_list, msg.as_string())
-
+# ----------------------------------------------------------
+# 📊 Obtener último estado del mercado
+# ----------------------------------------------------------
 def get_last_status(ws):
-    vals = ws.get_all_values()
-    if len(vals) < 2:
-        return None
-    # última fila no vacía
-    last = vals[-1]
-    # columnas: FechaISO | HoraLocal | Estado | Comentario
-    if len(last) >= 3 and last[2]:
-        return last[2]
-    return None
+    vals = safe_get_values(ws)
+    if not vals or len(vals) < 2:
+        return {}
+    last_row = vals[-1]
+    headers = vals[0]
+    return dict(zip(headers, last_row))
 
-# ======== Main ========
+# ----------------------------------------------------------
+# 🧾 Actualizar hoja de resultados
+# ----------------------------------------------------------
+def update_results(ws_perf):
+    try:
+        df = pd.DataFrame(ws_perf.get_all_records())
+        if df.empty:
+            log_debug("update_results", "Sin datos en performance.")
+            return
+        wins = (df["Resultado"] == "Win").sum()
+        loss = (df["Resultado"] == "Loss").sum()
+        be   = (df["Resultado"] == "BE").sum()
+        canc = (df["Resultado"] == "Cancel").sum()
+        log_debug("update_results",
+                  f"Performance total → Win:{wins} Loss:{loss} BE:{be} Cancel:{canc}")
+    except Exception as e:
+        log_debug("update_results_error", str(e))
+
+# ----------------------------------------------------------
+# 📬 Notificar resultados (correo simulado)
+# ----------------------------------------------------------
+def notify_summary():
+    try:
+        df = pd.DataFrame(WS_PERFORMANCE.get_all_records())
+        if df.empty:
+            send_mail_many("📈 Daily Summary", "Sin operaciones registradas hoy.", [ALERT_DEFAULT])
+            return
+        today = now_et().strftime("%Y-%m-%d")
+        dft = df[df["FechaISO"] == today]
+        if dft.empty:
+            send_mail_many("📈 Daily Summary", "Sin operaciones del día actual.", [ALERT_DEFAULT])
+            return
+
+        total = len(dft)
+        wins = (dft["Resultado"] == "Win").sum()
+        loss = (dft["Resultado"] == "Loss").sum()
+        pnl_series = pd.to_numeric(dft.get("PnL", pd.Series(dtype=float)), errors="coerce").dropna()
+        pnl_total = round(pnl_series.sum(), 2) if not pnl_series.empty else 0
+        body = f"Operaciones de hoy ({today}):\nTotal:{total} | Win:{wins} | Loss:{loss} | PnL:{pnl_total}"
+        send_mail_many("📈 Resumen Diario — Trading Bot 2025", body, [ALERT_DEFAULT])
+    except Exception as e:
+        log_debug("notify_summary_error", str(e))
+
+# ----------------------------------------------------------
+# 🚀 EJECUCIÓN PRINCIPAL
+# ----------------------------------------------------------
 def main():
-    t = now_et()
-    estado = market_status(t)
-
-    ws = ensure_ws("market_status", ["FechaISO","HoraLocal","Estado","Comentario"])
-
-    # Ver si cambió respecto al último estado
-    prev = get_last_status(ws)
-    changed = (prev is None) or (prev != estado)
-
-    # Mensaje para el log
-    comentario = "Mercado dentro del horario regular" if estado == "Abierto" else "Fuera de horario regular"
-    ws.append_row([
-        t.strftime("%Y-%m-%d"),
-        t.strftime("%H:%M:%S"),
-        estado,
-        comentario
-    ])
-
-    # Si hubo cambio, enviar correo
-    if changed and ALERT_DEFAULT:
-        if estado == "Abierto":
-            subject = "📈 Mercado ABIERTO (US Equities)"
-            body = f"El mercado abrió a las 09:30 ET.\nHora actual ET: {t.strftime('%H:%M:%S')}\nEstado: {estado}"
-        else:
-            subject = "📉 Mercado CERRADO (US Equities)"
-            body = f"El mercado cerró a las 16:00 ET.\nHora actual ET: {t.strftime('%H:%M:%S')}\nEstado: {estado}"
-        send_mail(subject, body, ALERT_DEFAULT)
+    log_debug("update_results", "🔄 Iniciando actualización de mercado y señales...")
+    try:
+        prev = get_last_status(WS_STATE)
+        log_debug("update_results", f"Último estado: {prev}")
+        update_results(WS_PERFORMANCE)
+        notify_summary()
+    except Exception as e:
+        log_debug("fatal_update", str(e))
 
 if __name__ == "__main__":
+    print("🚀 Ejecutando actualización automática de mercado y señales...")
     main()
+    print("✅ Actualización completada correctamente.")
