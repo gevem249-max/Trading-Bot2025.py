@@ -1,11 +1,11 @@
 # ==========================================================
-# 🤖 TRADING BOT 2025 — FULL MODE + HEARTBEAT
+# 🤖 TRADING BOT 2025 — FULL MODE + HEARTBEAT ID
 # ==========================================================
 # ✅ Auto-crea y repara hojas
 # ✅ Registra señales, estado, logs y market_status
-# ✅ Sentimiento noticioso direccional
-# ✅ Horarios adaptativos
-# ✅ Heartbeat visual (marca cada ciclo en la hoja)
+# ✅ Sentimiento noticioso direccional (Alpha Vantage)
+# ✅ Horarios adaptativos (día/noche)
+# ✅ Heartbeat visual con ID incremental
 # ==========================================================
 
 from bot_config import *
@@ -24,41 +24,50 @@ NEWS_ENDPOINT = "https://www.alphavantage.co/query"
 EMAILS = [ALERT_DEFAULT]
 
 # ==========================================================
-# MERCADO Y SESIONES
+# FUNCIONES DE MERCADO
 # ==========================================================
 def market_status():
+    """Determina si el mercado está abierto o cerrado."""
     now = now_et()
     h = now.hour + now.minute / 60
     d = now.weekday()
-    if d == 6 and h < 18: return "closed", "Domingo previo a apertura"
-    if 9.5 <= h < 16: return "open", "NYSE"
-    if h >= 18 or h < 8: return "open", "Globex"
+    if d == 6 and h < 18: 
+        return "closed", "Domingo previo a apertura"
+    if 9.5 <= h < 16: 
+        return "open", "NYSE"
+    if h >= 18 or h < 8: 
+        return "open", "Globex"
     return "closed", "Fuera de horario"
 
 # ==========================================================
-# NOTICIAS
+# SENTIMIENTO DE NOTICIAS
 # ==========================================================
 def news_sentiment(keyword="SP500"):
     if not ALPHA_KEY:
-        return random.choice(["up","down","neutral"])
+        return random.choice(["up", "down", "neutral"])
     try:
         url = f"{NEWS_ENDPOINT}?function=NEWS_SENTIMENT&tickers={keyword}&apikey={ALPHA_KEY}"
-        data = requests.get(url,timeout=10).json()
+        data = requests.get(url, timeout=10).json()
         score = float(data["feed"][0]["overall_sentiment_score"])
-        if score > 0.25: return "up"
-        elif score < -0.25: return "down"
-        else: return "neutral"
+        if score > 0.25:
+            return "up"
+        elif score < -0.25:
+            return "down"
+        else:
+            return "neutral"
     except Exception as e:
         log_debug("news_sentiment_error", str(e))
-        return random.choice(["up","down","neutral"])
+        return random.choice(["up", "down", "neutral"])
 
 # ==========================================================
-# ANÁLISIS TÉCNICO
+# ANÁLISIS DE MERCADO
 # ==========================================================
 def analyze_ticker(ticker):
+    """Aplica EMA8/21 y RSI para evaluar dirección."""
     try:
         data = yf.download(ticker, period="2d", interval="5m")
-        if data.empty: raise ValueError("Sin datos")
+        if data.empty:
+            raise ValueError("Sin datos")
         data["EMA8"] = data["Close"].ewm(span=8).mean()
         data["EMA21"] = data["Close"].ewm(span=21).mean()
         diff = data["Close"].diff()
@@ -75,9 +84,10 @@ def analyze_ticker(ticker):
         return "neutral", 50, 0
 
 # ==========================================================
-# GUARDAR SEÑAL
+# GUARDAR SEÑALES
 # ==========================================================
 def save_signal(ticker, side, prob, session, note):
+    """Registra señal completa en hoja signals."""
     try:
         now = now_et()
         WS_SIGNALS.append_row([
@@ -91,17 +101,20 @@ def save_signal(ticker, side, prob, session, note):
         log_debug("save_signal_error", f"{ticker}: {e}")
 
 # ==========================================================
-# HEARTBEAT
+# HEARTBEAT (PULSO VISUAL)
 # ==========================================================
 def heartbeat(session, state):
-    """Marca cada ciclo en market_status"""
+    """Marca el latido del bot con ID incremental."""
     try:
         now = now_et()
+        vals = WS_MARKET.get_all_records()
+        heartbeat_id = len(vals) + 1
         WS_MARKET.append_row([
             now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"),
             "Abierto" if state == "open" else "Cerrado",
-            f"Sesión {session}"
+            f"Sesión {session}", heartbeat_id
         ])
+        log_debug("heartbeat", f"✅ Pulso #{heartbeat_id} — {session}")
     except Exception as e:
         log_debug("heartbeat_error", str(e))
 
@@ -126,7 +139,8 @@ def run_cycle():
     # Señales
     for t in TICKERS:
         side, rsi, prob = analyze_ticker(t)
-        if direction == side: prob += 3
+        if direction == side:
+            prob += 3
         prob = min(prob, 99)
         save_signal(t, side, prob, session, f"RSI:{rsi} / News:{direction}")
 
@@ -140,22 +154,26 @@ def run_cycle():
 # ==========================================================
 def adaptive_schedule():
     now = now_et()
-    h = now.hour + now.minute/60
-    if 8 <= h < 13: cycles, wait = 8, 1800
-    elif 18 <= h or h < 8: cycles, wait = 2, 1800
-    else: cycles, wait = 1, 3600
+    h = now.hour + now.minute / 60
+    if 8 <= h < 13:
+        cycles, wait = 8, 1800  # Día: 4h
+    elif 18 <= h or h < 8:
+        cycles, wait = 2, 1800  # Noche: 1h
+    else:
+        cycles, wait = 1, 3600  # Fuera horario
     log_debug("adaptive_schedule", f"{cycles} ciclos de {wait/60:.0f} min")
 
     for i in range(cycles):
-        log_debug("main", f"Ciclo {i+1}/{cycles}")
+        log_debug("main", f"🌀 Ciclo {i+1}/{cycles}")
         run_cycle()
-        if i < cycles-1: time.sleep(wait)
+        if i < cycles - 1:
+            time.sleep(wait)
 
 # ==========================================================
 # MAIN
 # ==========================================================
 if __name__ == "__main__":
-    print("🚀 Iniciando Trading Bot 2025 (Full + Heartbeat)...")
+    print("🚀 Iniciando Trading Bot 2025 (Heartbeat Mode)...")
     log_debug("main", "run start")
     try:
         adaptive_schedule()
