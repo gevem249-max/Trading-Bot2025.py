@@ -1,14 +1,15 @@
 # ==========================================================
 # 🤖 TRADING BOT 2025 — MÓDULO PRINCIPAL (bot.py)
 # ==========================================================
-# ✅ Conexión completa con Google Sheets
+# ✅ Conexión completa con Google Sheets (auto-repair)
 # ✅ Registro y análisis de señales (todas las probabilidades)
-# ✅ Detección automática de sesiones (Globex / NYSE)
-# ✅ Integración con noticias (sentimiento direccional)
-# ✅ Guardado continuo en hoja 'signals' (≥80 y <80)
-# ✅ Envío de notificaciones y logs
+# ✅ Creación automática de hojas si se borran o dañan
+# ✅ Detección de sesiones (Globex / NYSE)
+# ✅ Integración con noticias (sentimiento direccional Alpha Vantage)
+# ✅ Notificaciones y logs en tiempo real
 # ✅ Compatible con ejecución continua en GitHub Actions
-# ✅ Horarios adaptativos (mañana 4 h, noche 1 h)
+# ✅ Horarios adaptativos (mañana 4 h / noche 1 h)
+# ✅ Registro forzado de señales incluso <80 % (aprendizaje)
 # ==========================================================
 
 from bot_config import *
@@ -17,34 +18,33 @@ import numpy as np
 import random
 import requests
 import time
+import pandas as pd
 
 # ==========================================================
 # 🔎 CONFIGURACIÓN GENERAL
 # ==========================================================
-
 TICKERS = ["ES=F", "NQ=F", "YM=F", "RTY=F"]
 NEWS_ENDPOINT = "https://www.alphavantage.co/query"
 ALPHA_KEY = os.environ.get("ALPHA_VANTAGE_KEY", "")
-EMAILS = [ALERT_DEFAULT]
+EMAILS = [ALERT_DEFAULT]  # destinatarios
 
 # ==========================================================
 # 🕒 HORARIOS Y SESIONES
 # ==========================================================
-
 def market_status():
     """Determina si el mercado está abierto, cerrado o en Globex."""
     try:
         now = now_et()
         hora = now.hour + now.minute / 60
-        dia = now.weekday()  # 0=lunes, 6=domingo
+        dia = now.weekday()  # 0 = lunes ... 6 = domingo
 
         if dia == 6 and hora < 18:
             return "closed", "Domingo previo a apertura"
 
-        # NYSE: 9:30–16:00 ET
+        # NYSE 9:30–16:00 ET
         if 9.5 <= hora < 16:
             return "open", "NYSE"
-        # Globex: 18:00–08:00 ET (domingo a viernes)
+        # Globex 18:00–08:00 ET
         elif hora >= 18 or hora < 8:
             return "open", "Globex"
         else:
@@ -54,49 +54,47 @@ def market_status():
         return "closed", "Error"
 
 # ==========================================================
-# 📰 NOTICIAS Y DIRECCIÓN
+# 📰 NOTICIAS Y DIRECCIÓN DEL MERCADO
 # ==========================================================
-
-def news_sentiment(keyword="market"):
-    """Devuelve un impacto direccional estimado basado en sentimiento."""
+def news_sentiment(keyword="SP500"):
+    """Evalúa sentimiento de mercado (direccional) vía Alpha Vantage."""
     if not ALPHA_KEY:
         return random.choice(["up", "down", "neutral"])
     try:
         url = f"{NEWS_ENDPOINT}?function=NEWS_SENTIMENT&tickers={keyword}&apikey={ALPHA_KEY}"
         data = requests.get(url, timeout=10).json()
-        if "feed" not in data or not data["feed"]:
-            return random.choice(["up", "down", "neutral"])
-        score = float(data["feed"][0].get("overall_sentiment_score", 0))
-        if score > 0.2:
+        score = float(data["feed"][0]["overall_sentiment_score"])
+        if score > 0.25:
             return "up"
-        elif score < -0.2:
+        elif score < -0.25:
             return "down"
-        return "neutral"
+        else:
+            return "neutral"
     except Exception as e:
         log_debug("news_sentiment_error", str(e))
         return random.choice(["up", "down", "neutral"])
 
 # ==========================================================
-# 📈 ANÁLISIS DE MERCADO
+# 📈 ANÁLISIS TÉCNICO
 # ==========================================================
-
 def analyze_ticker(ticker):
-    """Analiza un ticker y devuelve dirección, RSI y probabilidad."""
+    """Calcula tendencia, RSI y probabilidad simulada."""
     try:
         data = yf.download(ticker, period="2d", interval="5m")
         if data.empty:
-            raise ValueError("Sin datos históricos.")
+            raise ValueError("Sin datos de mercado")
         data["EMA8"] = data["Close"].ewm(span=8).mean()
         data["EMA21"] = data["Close"].ewm(span=21).mean()
-        rsi_up = data["Close"].diff().clip(lower=0)
-        rsi_down = -data["Close"].diff().clip(upper=0)
-        rsi = 100 - (100 / (1 + rsi_up.rolling(14).mean() / rsi_down.rolling(14).mean()))
+        diff = data["Close"].diff()
+        rsi_up = diff.clip(lower=0).rolling(14).mean()
+        rsi_down = diff.clip(upper=0).abs().rolling(14).mean()
+        data["RSI"] = 100 - (100 / (1 + rsi_up / rsi_down))
         last = data.iloc[-1]
 
         trend = "up" if last["EMA8"] > last["EMA21"] else "down"
-        rsi_val = round(float(rsi.iloc[-1]), 2)
-        prob = random.uniform(60, 95)  # valor simulado por modelo
-        return trend, rsi_val, prob
+        rsi = round(last["RSI"], 2)
+        prob = random.uniform(60, 98)  # simulación
+        return trend, rsi, prob
     except Exception as e:
         log_debug("analyze_error", f"{ticker}: {e}")
         return "neutral", 50, 0
@@ -104,100 +102,82 @@ def analyze_ticker(ticker):
 # ==========================================================
 # 🧾 REGISTRO DE SEÑALES
 # ==========================================================
-
 def save_signal(ticker, side, prob, session, note):
-    """Guarda señal en la hoja 'signals' (todas las probabilidades)."""
+    """Guarda señal en hoja 'signals'."""
     try:
         now = now_et()
-        estado = "Confirmada" if prob >= 80 else "Pre"
-        nota = "Alta confianza" if prob >= 80 else "En observación"
-
         WS_SIGNALS.append_row([
             now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), now.strftime("%H:%M:%S"),
-            ticker, side, "AUTO",
-            prob, "-", "-", "-", prob,
-            "AI_Estimated", estado, "Auto", "-", nota, session,
+            ticker, side, "AUTO", prob, "-", "-", "-", prob,
+            "AI_Estimated", "Active", "Auto", "-", note, session,
             "-", "-", "-", "-", "-", "-", "-", ";".join(EMAILS), "No"
         ])
-
-        log_debug("signal_saved", f"{ticker} {estado} ({prob:.2f}%) {session}")
-
-        # Solo notifica si la probabilidad es alta
-        if prob >= 80:
-            send_mail_many(
-                f"✅ Señal {ticker} ({prob:.1f}%) {session}",
-                f"Ticker: {ticker}\nSide: {side.upper()}\nProbFinal: {prob:.2f}%\nSesión: {session}\n{note}",
-                ALERT_DEFAULT
-            )
+        log_debug("signal_saved", f"{ticker} {side.upper()} ({prob:.2f}%) — {session}")
     except Exception as e:
         log_debug("save_signal_error", f"{ticker}: {e}")
 
 # ==========================================================
 # 🚦 CICLO PRINCIPAL
 # ==========================================================
-
 def run_cycle():
-    """Ejecuta un ciclo de análisis completo."""
+    """Ejecuta un ciclo completo de análisis y registro."""
     state, session = market_status()
     log_debug("cycle", f"Mercado {state} ({session})")
 
     if state == "closed":
-        upsert_state({"Market": "Closed", "Session": session,
-                      "LastChangeISO": now_et().isoformat()})
+        upsert_state({"Market": "Globex", "State": "Closed",
+                      "LastChangeISO": now_et().isoformat(),
+                      "date": now_et().strftime("%Y-%m-%d")})
         return
 
-    # Evalúa sentimiento de noticias
+    # 🔹 Análisis de noticias
     direction_news = news_sentiment()
-    log_debug("news", f"Sentimiento actual: {direction_news}")
+    log_debug("news", f"Sentimiento: {direction_news}")
 
+    # 🔹 Análisis de tickers
     for ticker in TICKERS:
         side, rsi, prob = analyze_ticker(ticker)
 
-        # Ajuste según noticias
+        # Ajuste con noticias
         if direction_news == "up" and side == "up":
             prob += 3
         elif direction_news == "down" and side == "down":
             prob += 3
         prob = min(prob, 99)
 
-        save_signal(ticker, side, prob, session, f"RSI:{rsi:.2f} / Sentiment:{direction_news}")
+        # Guardar TODAS las señales (≥80 y <80)
+        save_signal(ticker, side, prob, session, f"RSI:{rsi:.2f} / News:{direction_news}")
 
-    upsert_state({"Market": "Open", "Session": session,
-                  "LastChangeISO": now_et().isoformat()})
+    upsert_state({"Market": session, "State": "Open",
+                  "LastChangeISO": now_et().isoformat(),
+                  "date": now_et().strftime("%Y-%m-%d")})
     purge_old_debug(7)
 
 # ==========================================================
 # 🔁 HORARIO ADAPTATIVO
 # ==========================================================
-
 def adaptive_schedule():
-    """Controla la frecuencia según horario (NY/Globex)."""
+    """Ejecuta ciclos según horario ET."""
     now = now_et()
     hour = now.hour + now.minute / 60
 
-    # Mercado regular (mañana)
     if 8 <= hour < 13:
-        cycles = 8       # cada 30 min durante 4 h
-        interval = 1800
-    # Sesión Globex (noche)
+        cycles, interval = 8, 1800     # mañana 4 h (cada 30 min)
     elif 18 <= hour or hour < 8:
-        cycles = 2       # cada 30 min durante 1 h
-        interval = 1800
+        cycles, interval = 2, 1800     # noche 1 h (cada 30 min)
     else:
-        cycles = 1       # mantenimiento fuera de mercado
-        interval = 3600
-
-    log_debug("adaptive_schedule", f"Iniciando {cycles} ciclos de {interval/60:.0f} minutos")
+        cycles, interval = 1, 3600     # fuera de horario
+    log_debug("adaptive_schedule", f"Iniciando {cycles} ciclos de {interval/60:.0f} min")
 
     for i in range(cycles):
-        log_debug("main_cycle", f"Ciclo {i+1}/{cycles}")
+        log_debug("main", f"🌀 Ciclo {i+1}/{cycles}")
         run_cycle()
-        time.sleep(interval)
+        if i < cycles - 1:
+            time.sleep(interval)
 
 # ==========================================================
 # 🚀 EJECUCIÓN PRINCIPAL
 # ==========================================================
-
 if __name__ == "__main__":
     print("🚀 Iniciando Trading Bot 2025...")
     log_debug("main", "run start")
