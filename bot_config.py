@@ -1,6 +1,6 @@
-# ==================================================
-# ⚙️ CONFIGURACIÓN BASE — v4.3 SELF-HEALING (Auto-fix Secrets & Sheets)
-# ==================================================
+# ==========================================================
+# ⚙️ CONFIGURACIÓN BASE — v4.3 (Self-Healing + Performance)
+# ==========================================================
 import os, pytz, gspread, pandas as pd
 from google.oauth2.service_account import Credentials
 from datetime import datetime as dt, timedelta
@@ -10,43 +10,36 @@ from datetime import datetime as dt, timedelta
 # =========================
 TZ_ET = pytz.timezone("US/Eastern")
 SLEEP_SECONDS = 300          # cada 5 min
-CYCLES = 12                  # 1 hora por ejecución
+CYCLES = 12                  # 1 h por ejecución
 WATCHLIST = ["ES", "DKNG"]
 
 # =========================
-# 🔐 CONEXIÓN GOOGLE SHEETS (con fallback)
+# 🔐 CONEXIÓN GOOGLE SHEETS
 # =========================
-# Soporta ambos nombres de secret: GOOGLE_CREDS o GOOGLE_CREDS_JSON
-GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS") or os.getenv("GOOGLE_CREDS_JSON")
-SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
+GOOGLE_CREDS_JSON = os.getenv("GOOGLE_CREDS_JSON")
+SPREADSHEET_ID    = os.getenv("SPREADSHEET_ID")
 
 if not GOOGLE_CREDS_JSON or not SPREADSHEET_ID:
     raise ValueError("❌ Falta credencial o ID de hoja")
 
-try:
-    creds = Credentials.from_service_account_info(eval(GOOGLE_CREDS_JSON))
-    gc = gspread.authorize(creds)
-    SS = gc.open_by_key(SPREADSHEET_ID)
-    print(f"✅ Conectado a Google Sheets: {SS.title}")
-except Exception as e:
-    raise RuntimeError(f"❌ Error al conectar con Google Sheets: {e}")
+creds = Credentials.from_service_account_info(eval(GOOGLE_CREDS_JSON))
+gc    = gspread.authorize(creds)
+SS    = gc.open_by_key(SPREADSHEET_ID)
 
-# =========================
-# 🧾 ASEGURAR HOJAS Y ENCABEZADOS
-# =========================
 def ensure_ws(title, headers):
-    """Crea hoja si no existe y valida encabezados"""
+    """Crea la hoja si no existe y garantiza los encabezados."""
     try:
         ws = SS.worksheet(title)
     except gspread.WorksheetNotFound:
         ws = SS.add_worksheet(title=title, rows=1000, cols=len(headers))
         ws.update("A1", [headers])
-        print(f"🆕 Hoja creada: {title}")
+        return ws
     vals = ws.get_all_values()
     if not vals:
         ws.update("A1", [headers])
     return ws
 
+# === Hoja principal de señales ===
 WS_SIGNALS = ensure_ws("signals", [
     "FechaISO","HoraLocal","HoraRegistro","Ticker","Side","Entrada",
     "Prob_1m","Prob_5m","Prob_15m","Prob_1h","ProbFinal","ProbClasificación",
@@ -54,28 +47,36 @@ WS_SIGNALS = ensure_ws("signals", [
     "macd_val","sr_score","atr","SL","TP","Recipients","ScheduledConfirm"
 ])
 
+# === Hoja debug ===
 WS_DEBUG = ensure_ws("debug", ["Fecha","Hora","Mensaje"])
+
+# === Hoja de estado global ===
 WS_STATE = ensure_ws("state", ["clave","valor","timestamp"])
 
+# === Hoja performance (resultados de operaciones) ===
+WS_PERFORMANCE = ensure_ws("performance", [
+    "FechaISO","HoraRegistro","Ticker","Side","Entrada",
+    "ProbFinal","Resultado","PnL","ExitISO","ExitHora","Notas"
+])
+
 # =========================
-# 📧 CORREO / ALERTAS
+# 📧 CORREOS / ALERTAS
 # =========================
 ALERT_DEFAULT = os.getenv("ALERT_DEFAULT", "youremail@gmail.com")
-ALERT_ES = os.getenv("ALERT_ES", ALERT_DEFAULT)
-ALERT_DKNG = os.getenv("ALERT_DKNG", ALERT_DEFAULT)
+ALERT_ES  = os.getenv("ALERT_ES",  ALERT_DEFAULT)
+ALERT_DKNG= os.getenv("ALERT_DKNG",ALERT_DEFAULT)
 
 def send_mail_many(subject, body, recipients):
-    """Envía correo simulado (para despliegue local o GitHub Logs)"""
+    """Simula envío de correo (para pruebas en GitHub Actions)."""
     print(f"\n📧 [{subject}] → {recipients}\n{body}\n")
 
 # =========================
 # 🧩 UTILIDADES GENERALES
 # =========================
-def now_et(): 
-    return dt.now(TZ_ET)
+def now_et(): return dt.now(TZ_ET)
 
 def log_debug(tag, msg):
-    """Guarda logs en hoja debug"""
+    """Registra mensajes en hoja debug."""
     try:
         now = now_et()
         WS_DEBUG.append_row([now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), f"{tag}: {msg}"])
@@ -83,7 +84,7 @@ def log_debug(tag, msg):
         print("⚠️ Log failed:", e)
 
 def purge_old_debug(days=7):
-    """Elimina logs viejos para mantener liviana la hoja"""
+    """Limpia logs antiguos para evitar saturar la hoja."""
     try:
         df = pd.DataFrame(WS_DEBUG.get_all_records())
         if df.empty: return
@@ -91,18 +92,15 @@ def purge_old_debug(days=7):
         df = df[df["Fecha"] >= now_et() - timedelta(days=days)]
         WS_DEBUG.clear()
         WS_DEBUG.update("A1", [["Fecha","Hora","Mensaje"]])
-        for _, r in df.iterrows():
-            WS_DEBUG.append_row(r.tolist())
+        for _, r in df.iterrows(): WS_DEBUG.append_row(r.tolist())
     except Exception as e:
         print("⚠️ purge_old_debug:", e)
 
 def read_state_today():
-    """Lee variables guardadas (ej. cierres, aperturas)"""
     vals = WS_STATE.get_all_records()
     return {v["clave"]: v["valor"] for v in vals if v.get("clave")}
 
 def upsert_state(kv):
-    """Actualiza o inserta variables en hoja state"""
     vals = WS_STATE.get_all_records()
     df = pd.DataFrame(vals)
     for k, v in kv.items():
@@ -117,32 +115,10 @@ def upsert_state(kv):
 # 📈 ESTADO DE MERCADO
 # =========================
 def market_status(ticker):
-    """Determina si un mercado está abierto o cerrado"""
+    """Determina si el mercado está abierto, cerrado o en Globex."""
     now = now_et()
-    hour = now.hour + now.minute / 60
-
-    # 🌙 Globex (ES)
+    hour = now.hour + now.minute/60
     if ticker.upper() == "ES":
-        # Globex abre a las 18:00 ET y cierra a las 17:00 del siguiente día (domingo a viernes)
-        if (hour >= 18) or (hour < 17):
-            return ("open", "Globex")
-        else:
-            return ("closed", "Globex")
-            # === Hoja PERFORMANCE (resultados de operaciones) ===
-WS_PERFORMANCE = ensure_ws("performance", [
-    "FechaISO",          # fecha de la señal
-    "HoraRegistro",      # hora de la señal
-    "Ticker",
-    "Side",
-    "Entrada",           # "AUTO" u otra
-    "ProbFinal",
-    "Resultado",         # Open | Win | Loss | BE | Cancel
-    "PnL",               # numérico, opcional
-    "ExitISO",           # fecha de cierre
-    "ExitHora",          # hora de cierre
-    "Notas"              # comentario libre
-])
-
-    # 🏛️ NYSE (DKNG y similares)
+        return ("open","Globex") if (hour >= 18 or hour <= 17) else ("closed","Globex")
     else:
-        return ("open", "NYSE") if 9.5 <= hour <= 16 else ("closed", "NYSE")
+        return ("open","NYSE") if 9.5 <= hour <= 16 else ("closed","NYSE")
