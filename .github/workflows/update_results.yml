@@ -2,33 +2,37 @@ name: Update & Notify Results
 
 on:
   schedule:
-    - cron: "*/5 * * * *"   # ⏱️ Ejecutar cada 5 minutos
-  workflow_dispatch:         # Permitir ejecución manual desde GitHub
+    - cron: "0 * * * *"        # ⏰ cada hora en UTC (7 AM ET = 12 UTC)
+  workflow_dispatch:            # permite ejecución manual
 
 jobs:
   update-results:
     runs-on: ubuntu-latest
 
-    steps:
-      - name: 🧩 Checkout repo
-        uses: actions/checkout@v3
+    env:
+      GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
+      SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
+      ALERT_ES: ${{ secrets.ALERT_ES }}
+      ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
+      ALPHA_VANTAGE_KEY: ${{ secrets.NEWS_API_KEY }}  # o cámbialo si ya lo renombras
+      TZ: "America/New_York"
 
-      - name: 🐍 Set up Python
-        uses: actions/setup-python@v4
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.10"
 
-      - name: 📦 Install dependencies
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
-      - name: ⚙️ Run update_results.py
-        env:
-          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          GOOGLE_SHEETS_JSON: ${{ secrets.GOOGLE_SHEETS_JSON }}
-          GMAIL_USER: ${{ secrets.GMAIL_USER }}
-          GMAIL_APP_PASS: ${{ secrets.GMAIL_APP_PASS }}
+      - name: Run update_results.py
         run: |
           echo "🚀 Ejecutando actualización automática de mercado y señales..."
           python update_results.py
