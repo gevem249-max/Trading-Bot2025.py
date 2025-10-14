@@ -1,45 +1,30 @@
-name: Run Trading Bot (Adaptive Mode - 24/7)
+name: Run Trading Bot (Continuous Mode)
 
 on:
   schedule:
-    # Horarios adaptativos según sesión:
-    # - Cada 5 min de 00:00 a 13:00 ET → Globex (premercado y nocturno)
-    - cron: "*/5 0-13 * * *"
-    # - Cada 5 min de 13:00 a 21:00 ET → NYSE (mercado regular)
-    - cron: "*/5 13-21 * * *"
-    # - Cada 60 min de 21:00 a 23:59 ET → off-market (mantenimiento)
-    - cron: "0 21-23 * * *"
+    # ⏰ Cada 30 minutos, 24/7
+    - cron: "*/30 * * * *"
   workflow_dispatch:
-    inputs:
-      reason:
-        description: "Manual run reason"
-        required: false
-        default: "Ejecución manual"
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
-    name: "Trading Bot 2025 Execution"
+    timeout-minutes: 25
 
     steps:
-      # ==============================
-      # 1️⃣ INICIO Y PREPARACIÓN
-      # ==============================
-      - name: 🚀 Iniciando Trading Bot
-        run: |
-          echo "---------------------------------------------"
-          echo "🚀 Trading Bot 2025 — Adaptive Continuous Mode"
-          echo "🕒 $(date)"
-          echo "---------------------------------------------"
+      # ==========================================================
+      # 🧩 1️⃣ PREPARAR ENTORNO
+      # ==========================================================
+      - name: 🚀 Iniciando Trading Bot...
+        run: echo "🚀 Iniciando Trading Bot..."
 
-      - name: 📥 Checkout repositorio
+      - name: 🧭 Clonar repositorio
         uses: actions/checkout@v4
 
-      # ==============================
-      # 2️⃣ CONFIGURACIÓN PYTHON
-      # ==============================
-      - name: 🐍 Set up Python 3.11
+      # ==========================================================
+      # 🐍 2️⃣ CONFIGURAR PYTHON
+      # ==========================================================
+      - name: ⚙️ Configurar Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
@@ -47,48 +32,35 @@ jobs:
       - name: 📦 Instalar dependencias
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then
-            pip install -r requirements.txt
-          fi
-          echo "✅ Dependencias instaladas correctamente."
+          pip install -r requirements.txt
 
-      # ==============================
-      # 3️⃣ VALIDAR VARIABLES (SECRETOS)
-      # ==============================
-      - name: 🧩 Verificar secrets
-        run: |
-          echo "GOOGLE_CREDS_JSON cargado: ${{ secrets.GOOGLE_CREDS_JSON != '' }}"
-          echo "SPREADSHEET_ID cargado: ${{ secrets.SPREADSHEET_ID != '' }}"
-          echo "ALERT_DEFAULT cargado: ${{ secrets.ALERT_DEFAULT != '' }}"
-          echo "✅ Variables ambientales verificadas."
-
-      # ==============================
-      # 4️⃣ EJECUCIÓN DEL BOT
-      # ==============================
-      - name: ▶️ Ejecutar bot.py
+      # ==========================================================
+      # 🔐 3️⃣ VARIABLES DE ENTORNO (CREDENCIALES)
+      # ==========================================================
+      - name: 🔑 Configurar variables secretas
         env:
           GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
-          GOOGLE_CREDS: ${{ secrets.GOOGLE_CREDS }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-          ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
-          ALERT_ES: ${{ secrets.ALERT_ES }}
-          ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
           ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
-        run: |
-          echo "🏁 Iniciando análisis de mercado..."
-          python bot.py || echo "⚠️ Error detectado durante la ejecución."
+          ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
+        run: echo "✅ Variables configuradas correctamente"
 
-      # ==============================
-      # 5️⃣ REINTENTO Y LIMPIEZA
-      # ==============================
-      - name: 🔁 Auto-retry si falla
-        if: failure()
+      # ==========================================================
+      # 🤖 4️⃣ EJECUTAR BOT PRINCIPAL
+      # ==========================================================
+      - name: 🧠 Ejecutar bot.py
+        env:
+          GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
+          SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+          ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
+          ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
         run: |
-          echo "⚠️ El bot presentó un error, se reintentará en la próxima ejecución."
-          echo "⌛ Guardando logs para depuración."
+          echo "▶️ Ejecutando bot.py"
+          python bot.py || echo "⚠️ Error detectado, se intentará en el siguiente ciclo."
 
-      - name: 🧹 Limpieza de caché y temporales
-        run: |
-          rm -rf __pycache__
-          rm -rf .pytest_cache
-          echo "🧽 Limpieza completada correctamente."
+      # ==========================================================
+      # 📜 5️⃣ GUARDAR LOGS Y RESULTADOS
+      # ==========================================================
+      - name: 📊 Finalizar ejecución
+        if: always()
+        run: echo "✅ Ejecución finalizada correctamente — $(date)"
