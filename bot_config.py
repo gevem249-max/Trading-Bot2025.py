@@ -128,6 +128,20 @@ def market_status(ticker):
             return ("open", "Globex")
         else:
             return ("closed", "Globex")
+            # === Hoja PERFORMANCE (resultados de operaciones) ===
+WS_PERFORMANCE = ensure_ws("performance", [
+    "FechaISO",          # fecha de la señal
+    "HoraRegistro",      # hora de la señal
+    "Ticker",
+    "Side",
+    "Entrada",           # "AUTO" u otra
+    "ProbFinal",
+    "Resultado",         # Open | Win | Loss | BE | Cancel
+    "PnL",               # numérico, opcional
+    "ExitISO",           # fecha de cierre
+    "ExitHora",          # hora de cierre
+    "Notas"              # comentario libre
+])
 
     # 🏛️ NYSE (DKNG y similares)
     else:
