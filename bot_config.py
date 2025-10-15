@@ -1,5 +1,5 @@
 # ==========================================================
-# ⚙️ CONFIGURACIÓN BASE — v4.3 (Self-Healing + Performance)
+# ⚙️ CONFIGURACIÓN BASE — v4.4 (Google Sheets + Self-Healing)
 # ==========================================================
 import os, pytz, gspread, pandas as pd
 from google.oauth2.service_account import Credentials
@@ -9,8 +9,8 @@ from datetime import datetime as dt, timedelta
 # 🕒 ZONA HORARIA Y CICLOS
 # =========================
 TZ_ET = pytz.timezone("US/Eastern")
-SLEEP_SECONDS = 300          # cada 5 min
-CYCLES = 12                  # 1 h por ejecución
+SLEEP_SECONDS = 300
+CYCLES = 12
 WATCHLIST = ["ES", "DKNG"]
 
 # =========================
@@ -22,10 +22,19 @@ SPREADSHEET_ID    = os.getenv("SPREADSHEET_ID")
 if not GOOGLE_CREDS_JSON or not SPREADSHEET_ID:
     raise ValueError("❌ Falta credencial o ID de hoja")
 
-creds = Credentials.from_service_account_info(eval(GOOGLE_CREDS_JSON))
+# 👉 Agregar SCOPES necesarios para evitar "invalid_scope"
+scopes = [
+    "https://www.googleapis.com/auth/spreadsheets",
+    "https://www.googleapis.com/auth/drive"
+]
+
+creds = Credentials.from_service_account_info(eval(GOOGLE_CREDS_JSON), scopes=scopes)
 gc    = gspread.authorize(creds)
 SS    = gc.open_by_key(SPREADSHEET_ID)
 
+# ----------------------------------------------------------
+# 🧾 Crear o garantizar hojas existentes
+# ----------------------------------------------------------
 def ensure_ws(title, headers):
     """Crea la hoja si no existe y garantiza los encabezados."""
     try:
@@ -39,7 +48,7 @@ def ensure_ws(title, headers):
         ws.update("A1", [headers])
     return ws
 
-# === Hoja principal de señales ===
+# === Hojas principales ===
 WS_SIGNALS = ensure_ws("signals", [
     "FechaISO","HoraLocal","HoraRegistro","Ticker","Side","Entrada",
     "Prob_1m","Prob_5m","Prob_15m","Prob_1h","ProbFinal","ProbClasificación",
@@ -47,21 +56,16 @@ WS_SIGNALS = ensure_ws("signals", [
     "macd_val","sr_score","atr","SL","TP","Recipients","ScheduledConfirm"
 ])
 
-# === Hoja debug ===
 WS_DEBUG = ensure_ws("debug", ["Fecha","Hora","Mensaje"])
-
-# === Hoja de estado global ===
 WS_STATE = ensure_ws("state", ["clave","valor","timestamp"])
-
-# === Hoja performance (resultados de operaciones) ===
 WS_PERFORMANCE = ensure_ws("performance", [
     "FechaISO","HoraRegistro","Ticker","Side","Entrada",
     "ProbFinal","Resultado","PnL","ExitISO","ExitHora","Notas"
 ])
 
-# =========================
+# ----------------------------------------------------------
 # 📧 CORREOS / ALERTAS
-# =========================
+# ----------------------------------------------------------
 ALERT_DEFAULT = os.getenv("ALERT_DEFAULT", "youremail@gmail.com")
 ALERT_ES  = os.getenv("ALERT_ES",  ALERT_DEFAULT)
 ALERT_DKNG= os.getenv("ALERT_DKNG",ALERT_DEFAULT)
@@ -70,13 +74,12 @@ def send_mail_many(subject, body, recipients):
     """Simula envío de correo (para pruebas en GitHub Actions)."""
     print(f"\n📧 [{subject}] → {recipients}\n{body}\n")
 
-# =========================
+# ----------------------------------------------------------
 # 🧩 UTILIDADES GENERALES
-# =========================
+# ----------------------------------------------------------
 def now_et(): return dt.now(TZ_ET)
 
 def log_debug(tag, msg):
-    """Registra mensajes en hoja debug."""
     try:
         now = now_et()
         WS_DEBUG.append_row([now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), f"{tag}: {msg}"])
@@ -84,7 +87,6 @@ def log_debug(tag, msg):
         print("⚠️ Log failed:", e)
 
 def purge_old_debug(days=7):
-    """Limpia logs antiguos para evitar saturar la hoja."""
     try:
         df = pd.DataFrame(WS_DEBUG.get_all_records())
         if df.empty: return
@@ -111,11 +113,10 @@ def upsert_state(kv):
         else:
             WS_STATE.append_row([k, v, now_et().strftime("%Y-%m-%d %H:%M:%S")])
 
-# =========================
+# ----------------------------------------------------------
 # 📈 ESTADO DE MERCADO
-# =========================
+# ----------------------------------------------------------
 def market_status(ticker):
-    """Determina si el mercado está abierto, cerrado o en Globex."""
     now = now_et()
     hour = now.hour + now.minute/60
     if ticker.upper() == "ES":
