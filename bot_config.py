@@ -1,7 +1,7 @@
 # ==========================================================
-# ⚙️ CONFIGURACIÓN BASE — v4.4 (Google Sheets + Self-Healing)
+# ⚙️ CONFIGURACIÓN BASE — v4.5 (Google Sheets + Auto-Fix Key)
 # ==========================================================
-import os, pytz, gspread, pandas as pd
+import os, pytz, gspread, json, pandas as pd
 from google.oauth2.service_account import Credentials
 from datetime import datetime as dt, timedelta
 
@@ -22,15 +22,30 @@ SPREADSHEET_ID    = os.getenv("SPREADSHEET_ID")
 if not GOOGLE_CREDS_JSON or not SPREADSHEET_ID:
     raise ValueError("❌ Falta credencial o ID de hoja")
 
-# 👉 Agregar SCOPES necesarios para evitar "invalid_scope"
+# ✅ Scopes correctos para Sheets + Drive
 scopes = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive"
 ]
 
-creds = Credentials.from_service_account_info(eval(GOOGLE_CREDS_JSON), scopes=scopes)
-gc    = gspread.authorize(creds)
-SS    = gc.open_by_key(SPREADSHEET_ID)
+# ✅ Carga segura del JSON (sin eval)
+try:
+    data = json.loads(GOOGLE_CREDS_JSON)
+except json.JSONDecodeError as e:
+    raise ValueError(f"❌ Error al decodificar GOOGLE_CREDS_JSON: {e}")
+
+# ✅ Auto-fix del private_key (corrige \\n rotos en GitHub Secrets)
+if "\\n" in data.get("private_key", ""):
+    data["private_key"] = data["private_key"].replace("\\n", "\n")
+
+# ✅ Autenticación con Google
+try:
+    creds = Credentials.from_service_account_info(data, scopes=scopes)
+    gc    = gspread.authorize(creds)
+    SS    = gc.open_by_key(SPREADSHEET_ID)
+    print("✅ Google Sheets conectado correctamente.")
+except Exception as e:
+    raise RuntimeError(f"❌ Error al conectar con Google Sheets: {e}")
 
 # ----------------------------------------------------------
 # 🧾 Crear o garantizar hojas existentes
@@ -42,10 +57,12 @@ def ensure_ws(title, headers):
     except gspread.WorksheetNotFound:
         ws = SS.add_worksheet(title=title, rows=1000, cols=len(headers))
         ws.update("A1", [headers])
+        print(f"🆕 Hoja creada: {title}")
         return ws
     vals = ws.get_all_values()
     if not vals:
         ws.update("A1", [headers])
+        print(f"📄 Hoja inicializada: {title}")
     return ws
 
 # === Hojas principales ===
@@ -77,32 +94,43 @@ def send_mail_many(subject, body, recipients):
 # ----------------------------------------------------------
 # 🧩 UTILIDADES GENERALES
 # ----------------------------------------------------------
-def now_et(): return dt.now(TZ_ET)
+def now_et(): 
+    return dt.now(TZ_ET)
 
 def log_debug(tag, msg):
+    """Registra mensajes de debug en la hoja correspondiente."""
     try:
         now = now_et()
-        WS_DEBUG.append_row([now.strftime("%Y-%m-%d"), now.strftime("%H:%M:%S"), f"{tag}: {msg}"])
+        WS_DEBUG.append_row([
+            now.strftime("%Y-%m-%d"),
+            now.strftime("%H:%M:%S"),
+            f"{tag}: {msg}"
+        ])
     except Exception as e:
         print("⚠️ Log failed:", e)
 
 def purge_old_debug(days=7):
+    """Limpia registros antiguos en la hoja debug."""
     try:
         df = pd.DataFrame(WS_DEBUG.get_all_records())
-        if df.empty: return
+        if df.empty: 
+            return
         df["Fecha"] = pd.to_datetime(df["Fecha"], errors="coerce")
         df = df[df["Fecha"] >= now_et() - timedelta(days=days)]
         WS_DEBUG.clear()
         WS_DEBUG.update("A1", [["Fecha","Hora","Mensaje"]])
-        for _, r in df.iterrows(): WS_DEBUG.append_row(r.tolist())
+        for _, r in df.iterrows():
+            WS_DEBUG.append_row(r.tolist())
     except Exception as e:
         print("⚠️ purge_old_debug:", e)
 
 def read_state_today():
+    """Lee el estado global del día."""
     vals = WS_STATE.get_all_records()
     return {v["clave"]: v["valor"] for v in vals if v.get("clave")}
 
 def upsert_state(kv):
+    """Actualiza o inserta valores en la hoja de estado."""
     vals = WS_STATE.get_all_records()
     df = pd.DataFrame(vals)
     for k, v in kv.items():
@@ -117,6 +145,7 @@ def upsert_state(kv):
 # 📈 ESTADO DE MERCADO
 # ----------------------------------------------------------
 def market_status(ticker):
+    """Determina si el mercado está abierto o cerrado."""
     now = now_et()
     hour = now.hour + now.minute/60
     if ticker.upper() == "ES":
