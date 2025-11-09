@@ -1,14 +1,19 @@
-name: Run Trading Bot (Continuous Mode)
+name: Run Trading Bot (Single Cycle)
 
 on:
-  workflow_dispatch:   # 🔹 Permite lanzarlo manualmente desde GitHub Actions
+  workflow_dispatch:   # 🔹 Permite lanzarlo manualmente
   schedule:
-    - cron: "0 * * * *"   # 🔹 Ejecutar automáticamente cada hora
+    # Ejecutar cada hora durante horario de mercado NYSE (9:30 AM - 4:00 PM ET)
+    # Convertido a UTC: 14:30 - 21:00 (horario estándar) o 13:30 - 20:00 (horario verano)
+    - cron: "30 13-20 * * 1-5"   # Lunes a Viernes, cada hora
+    
+    # También ejecutar durante Globex nocturno (6 PM - 8 AM ET)
+    - cron: "0 23,0,1,2,3,4,5,6,7,8,9,10,11,12 * * 0-4"  # Domingo noche a Viernes mañana
 
 jobs:
   run-bot:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 10   # ✅ Timeout reducido a 10 minutos
 
     steps:
       - name: 🧾 Checkout repo
@@ -22,14 +27,20 @@ jobs:
       - name: 📦 Install dependencies
         run: |
           pip install --upgrade pip
-          pip install gspread google-auth yfinance pandas pytz requests
+          pip install -r requirements.txt
 
-      - name: ▶️ Ejecutando bot.py...
+      - name: ▶️ Ejecutando bot.py (ciclo único)...
         env:
           GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
           SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
           ALERT_DEFAULT: ${{ secrets.ALERT_DEFAULT }}
+          ALERT_ES: ${{ secrets.ALERT_ES }}
+          ALERT_DKNG: ${{ secrets.ALERT_DKNG }}
           ALPHA_VANTAGE_KEY: ${{ secrets.ALPHA_VANTAGE_KEY }}
+          BOT_MODE: "single_cycle"   # ✅ Modo ciclo único
         run: |
-          echo "🔐 Iniciando Trading Bot con conexión a Google Sheets..."
+          echo "🔐 Iniciando Trading Bot (modo ciclo único)..."
           python bot.py
+          
+      - name: ✅ Ciclo completado
+        run: echo "✅ Bot ejecutado correctamente"
