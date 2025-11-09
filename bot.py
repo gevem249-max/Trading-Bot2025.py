@@ -479,14 +479,30 @@ if __name__ == "__main__":
     print("🚀 Iniciando Trading Bot 2025 v5.0...")
     log_debug("main", "Bot iniciado")
     
+    # Detectar modo de ejecución
+    bot_mode = os.getenv("BOT_MODE", "continuous")
+    
     try:
-        adaptive_schedule()
+        if bot_mode == "single_cycle":
+            # Modo ciclo único (para GitHub Actions)
+            print("🔄 Modo: Ciclo único")
+            log_debug("main", "Ejecutando en modo ciclo único")
+            run_cycle()
+            print("✅ Ciclo único completado")
+        else:
+            # Modo continuo (para ejecución local)
+            print("🔄 Modo: Continuo")
+            log_debug("main", "Ejecutando en modo continuo")
+            adaptive_schedule()
+            
     except KeyboardInterrupt:
         log_debug("main", "Bot detenido por usuario")
         print("\n⏹️ Bot detenido por usuario")
     except Exception as e:
         log_debug("fatal_error", str(e))
         print(f"❌ Error fatal: {e}")
+        import traceback
+        traceback.print_exc()
     
     log_debug("main", "Bot finalizado")
     print("✅ Bot finalizado correctamente")
