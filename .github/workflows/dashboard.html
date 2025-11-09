@@ -1,0 +1,407 @@
+#!/usr/bin/env python3
+"""
+🌐 Trading Bot Dashboard Server
+Servidor web para visualizar señales del bot en tiempo real
+"""
+
+import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+import plotly.express as px
+from datetime import datetime, timedelta
+import os
+import sys
+
+# Importar configuración del bot
+try:
+    from bot_config import WS_SIGNALS, WS_PERFORMANCE, WS_DEBUG, now_et
+except ImportError:
+    st.error("❌ No se pudo importar bot_config.py. Asegúrate de que esté en el mismo directorio.")
+    sys.exit(1)
+
+# Configuración de la página
+st.set_page_config(
+    page_title="Trading Bot 2025 Dashboard",
+    page_icon="🤖",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# CSS personalizado
+st.markdown("""
+<style>
+    .main {
+        background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    }
+    
+    .stMetric {
+        background: white;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+    }
+    
+    .stDataFrame {
+        background: white;
+        border-radius: 10px;
+        padding: 10px;
+    }
+    
+    h1, h2, h3 {
+        color: white !important;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Título principal
+st.title("🤖 Trading Bot 2025 - Dashboard")
+st.markdown("---")
+
+# Sidebar - Filtros
+with st.sidebar:
+    st.header("⚙️ Configuración")
+    
+    # Selector de rango de tiempo
+    time_range = st.selectbox(
+        "📅 Rango de Tiempo",
+        ["Últimas 24 horas", "Últimos 7 días", "Último mes", "Todo"]
+    )
+    
+    # Filtro de probabilidad
+    min_prob = st.slider(
+        "🎯 Probabilidad Mínima (%)",
+        min_value=50,
+        max_value=100,
+        value=70,
+        step=5
+    )
+    
+    # Filtro de ticker
+    ticker_filter = st.multiselect(
+        "📊 Tickers",
+        ["Todos", "ES", "DKNG"],
+        default=["Todos"]
+    )
+    
+    # Botón de actualización
+    if st.button("🔄 Actualizar Datos", use_container_width=True):
+        st.rerun()
+    
+    st.markdown("---")
+    st.caption(f"Última actualización: {now_et().strftime('%Y-%m-%d %H:%M:%S ET')}")
+
+# Función para cargar datos
+@st.cache_data(ttl=60)  # Cache por 1 minuto
+def load_signals():
+    """Carga señales desde Google Sheets."""
+    try:
+        data = WS_SIGNALS.get_all_records()
+        if not data:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(data)
+        
+        # Limpiar y convertir tipos
+        df['ProbFinal'] = pd.to_numeric(df['ProbFinal'], errors='coerce')
+        df['FechaISO'] = pd.to_datetime(df['FechaISO'], errors='coerce')
+        
+        return df
+    except Exception as e:
+        st.error(f"Error cargando señales: {e}")
+        return pd.DataFrame()
+
+@st.cache_data(ttl=60)
+def load_performance():
+    """Carga performance desde Google Sheets."""
+    try:
+        data = WS_PERFORMANCE.get_all_records()
+        if not data:
+            return pd.DataFrame()
+        
+        df = pd.DataFrame(data)
+        
+        # Limpiar y convertir tipos
+        df['ProbFinal'] = pd.to_numeric(df['ProbFinal'], errors='coerce')
+        df['PnL'] = pd.to_numeric(df['PnL'], errors='coerce')
+        df['FechaISO'] = pd.to_datetime(df['FechaISO'], errors='coerce')
+        
+        return df
+    except Exception as e:
+        st.error(f"Error cargando performance: {e}")
+        return pd.DataFrame()
+
+# Cargar datos
+df_signals = load_signals()
+df_performance = load_performance()
+
+# Aplicar filtros de tiempo
+if not df_signals.empty:
+    if time_range == "Últimas 24 horas":
+        cutoff = now_et() - timedelta(hours=24)
+        df_signals = df_signals[df_signals['FechaISO'] >= cutoff]
+    elif time_range == "Últimos 7 días":
+        cutoff = now_et() - timedelta(days=7)
+        df_signals = df_signals[df_signals['FechaISO'] >= cutoff]
+    elif time_range == "Último mes":
+        cutoff = now_et() - timedelta(days=30)
+        df_signals = df_signals[df_signals['FechaISO'] >= cutoff]
+    
+    # Filtro de probabilidad
+    df_signals = df_signals[df_signals['ProbFinal'] >= min_prob]
+    
+    # Filtro de ticker
+    if "Todos" not in ticker_filter:
+        df_signals = df_signals[df_signals['Ticker'].isin(ticker_filter)]
+
+# Filtrar performance también
+if not df_performance.empty and time_range != "Todo":
+    if time_range == "Últimas 24 horas":
+        cutoff = now_et() - timedelta(hours=24)
+        df_performance = df_performance[df_performance['FechaISO'] >= cutoff]
+    elif time_range == "Últimos 7 días":
+        cutoff = now_et() - timedelta(days=7)
+        df_performance = df_performance[df_performance['FechaISO'] >= cutoff]
+    elif time_range == "Último mes":
+        cutoff = now_et() - timedelta(days=30)
+        df_performance = df_performance[df_performance['FechaISO'] >= cutoff]
+
+# ============================================
+# MÉTRICAS PRINCIPALES
+# ============================================
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    total_signals = len(df_signals)
+    st.metric(
+        label="📊 Total Señales",
+        value=total_signals,
+        delta=f"Min prob: {min_prob}%"
+    )
+
+with col2:
+    if not df_performance.empty:
+        completed = df_performance[df_performance['Resultado'].isin(['Win', 'Loss'])]
+        wins = len(completed[completed['Resultado'] == 'Win'])
+        winrate = (wins / len(completed) * 100) if len(completed) > 0 else 0
+        st.metric(
+            label="✅ Winrate",
+            value=f"{winrate:.1f}%",
+            delta=f"{wins}/{len(completed)}"
+        )
+    else:
+        st.metric(label="✅ Winrate", value="N/A")
+
+with col3:
+    high_prob_signals = len(df_signals[df_signals['ProbFinal'] >= 80])
+    st.metric(
+        label="🎯 Señales ≥80%",
+        value=high_prob_signals,
+        delta=f"{(high_prob_signals/total_signals*100):.1f}%" if total_signals > 0 else "0%"
+    )
+
+with col4:
+    if not df_performance.empty:
+        total_pnl = df_performance['PnL'].sum()
+        st.metric(
+            label="💰 PnL Total",
+            value=f"${total_pnl:.2f}",
+            delta="Ganancia/Pérdida",
+            delta_color="normal" if total_pnl >= 0 else "inverse"
+        )
+    else:
+        st.metric(label="💰 PnL Total", value="$0.00")
+
+st.markdown("---")
+
+# ============================================
+# GRÁFICOS
+# ============================================
+if not df_signals.empty:
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("📈 Distribución de Probabilidades")
+        
+        fig = px.histogram(
+            df_signals,
+            x='ProbFinal',
+            nbins=20,
+            color_discrete_sequence=['#667eea']
+        )
+        fig.update_layout(
+            xaxis_title="Probabilidad (%)",
+            yaxis_title="Cantidad de Señales",
+            showlegend=False,
+            plot_bgcolor='white'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.subheader("🎯 Señales por Ticker")
+        
+        ticker_counts = df_signals['Ticker'].value_counts()
+        fig = px.pie(
+            values=ticker_counts.values,
+            names=ticker_counts.index,
+            color_discrete_sequence=px.colors.sequential.Purples_r
+        )
+        fig.update_traces(textposition='inside', textinfo='percent+label')
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Gráfico de señales en el tiempo
+    st.subheader("⏰ Señales a lo Largo del Tiempo")
+    
+    df_signals['Fecha'] = df_signals['FechaISO'].dt.date
+    signals_by_date = df_signals.groupby('Fecha').size().reset_index(name='Cantidad')
+    
+    fig = px.line(
+        signals_by_date,
+        x='Fecha',
+        y='Cantidad',
+        markers=True,
+        color_discrete_sequence=['#667eea']
+    )
+    fig.update_layout(
+        xaxis_title="Fecha",
+        yaxis_title="Número de Señales",
+        showlegend=False,
+        plot_bgcolor='white'
+    )
+    st.plotly_chart(fig, use_container_width=True)
+
+else:
+    st.info("📭 No hay señales disponibles con los filtros seleccionados.")
+
+st.markdown("---")
+
+# ============================================
+# TABLA DE SEÑALES RECIENTES
+# ============================================
+st.subheader("📋 Señales Recientes")
+
+if not df_signals.empty:
+    # Preparar datos para mostrar
+    display_df = df_signals[[
+        'FechaISO', 'HoraRegistro', 'Ticker', 'Side', 
+        'ProbFinal', 'Mercado', 'pattern', 'Nota'
+    ]].copy()
+    
+    # Renombrar columnas
+    display_df.columns = [
+        'Fecha', 'Hora', 'Ticker', 'Dirección', 
+        'Probabilidad', 'Mercado', 'Patrón', 'Notas'
+    ]
+    
+    # Formatear probabilidad
+    display_df['Probabilidad'] = display_df['Probabilidad'].apply(lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A")
+    
+    # Ordenar por fecha descendente
+    display_df = display_df.sort_values('Fecha', ascending=False)
+    
+    # Mostrar tabla con colores
+    st.dataframe(
+        display_df.head(20),
+        use_container_width=True,
+        hide_index=True
+    )
+    
+    # Botón para descargar CSV
+    csv = display_df.to_csv(index=False)
+    st.download_button(
+        label="📥 Descargar Señales (CSV)",
+        data=csv,
+        file_name=f"signals_{now_et().strftime('%Y%m%d')}.csv",
+        mime="text/csv"
+    )
+else:
+    st.info("📭 No hay señales para mostrar.")
+
+st.markdown("---")
+
+# ============================================
+# PERFORMANCE DETALLADO
+# ============================================
+if not df_performance.empty:
+    st.subheader("📊 Performance Detallado")
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown("### Resultados")
+        
+        results = df_performance['Resultado'].value_counts()
+        fig = px.bar(
+            x=results.index,
+            y=results.values,
+            color=results.index,
+            color_discrete_map={
+                'Win': '#10b981',
+                'Loss': '#ef4444',
+                'BE': '#f59e0b',
+                'Cancel': '#6b7280',
+                'Open': '#667eea'
+            }
+        )
+        fig.update_layout(
+            xaxis_title="Resultado",
+            yaxis_title="Cantidad",
+            showlegend=False,
+            plot_bgcolor='white'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+    
+    with col2:
+        st.markdown("### PnL Acumulado")
+        
+        df_perf_sorted = df_performance.sort_values('FechaISO')
+        df_perf_sorted['PnL_Acumulado'] = df_perf_sorted['PnL'].cumsum()
+        
+        fig = px.line(
+            df_perf_sorted,
+            x='FechaISO',
+            y='PnL_Acumulado',
+            color_discrete_sequence=['#10b981' if df_perf_sorted['PnL_Acumulado'].iloc[-1] >= 0 else '#ef4444']
+        )
+        fig.update_layout(
+            xaxis_title="Fecha",
+            yaxis_title="PnL Acumulado ($)",
+            showlegend=False,
+            plot_bgcolor='white'
+        )
+        fig.add_hline(y=0, line_dash="dash", line_color="gray")
+        st.plotly_chart(fig, use_container_width=True)
+    
+    # Tabla de performance
+    st.markdown("### Últimas Operaciones")
+    
+    perf_display = df_performance[[
+        'FechaISO', 'Ticker', 'Side', 'ProbFinal', 
+        'Resultado', 'PnL', 'Notas'
+    ]].copy()
+    
+    perf_display.columns = [
+        'Fecha', 'Ticker', 'Dirección', 'Probabilidad',
+        'Resultado', 'PnL', 'Notas'
+    ]
+    
+    perf_display['Probabilidad'] = perf_display['Probabilidad'].apply(
+        lambda x: f"{x:.1f}%" if pd.notna(x) else "N/A"
+    )
+    perf_display['PnL'] = perf_display['PnL'].apply(
+        lambda x: f"${x:.2f}" if pd.notna(x) else "$0.00"
+    )
+    
+    perf_display = perf_display.sort_values('Fecha', ascending=False)
+    
+    st.dataframe(
+        perf_display.head(15),
+        use_container_width=True,
+        hide_index=True
+    )
+
+else:
+    st.info("📭 No hay datos de performance disponibles.")
+
+# Footer
+st.markdown("---")
+st.caption("🤖 Trading Bot 2025 | Dashboard en Tiempo Real")
